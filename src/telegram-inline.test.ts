@@ -172,3 +172,56 @@ test("empty posts returns article with unavailable message", () => {
     result.input_message_content?.message_text?.includes("Post deleted"),
   );
 });
+
+test("sensitive single photo falls back to fxtwitter article", () => {
+  const posts: PreviewPost[] = [
+    {
+      id: "20",
+      url: "https://x.com/alice/status/20",
+      authorName: "Alice",
+      text: "sensitive",
+      media: [
+        {
+          kind: "photo",
+          url: "https://example.com/1.jpg",
+          spoiler: true,
+        },
+      ],
+    },
+  ];
+
+  const result = asResult(buildInlineResult(posts));
+  assert.equal(result.type, "article");
+  assert.ok(
+    result.input_message_content?.message_text?.includes(
+      "fxtwitter.com/alice/status/20",
+    ),
+  );
+});
+
+test("sensitive single video goes to fxtwitter article", () => {
+  const posts: PreviewPost[] = [
+    {
+      id: "20",
+      url: "https://x.com/alice/status/20",
+      authorName: "Alice",
+      text: "sensitive video",
+      media: [
+        {
+          kind: "video",
+          url: "https://example.com/video.mp4",
+          thumbnailUrl: "https://example.com/thumb.jpg",
+          spoiler: true,
+        },
+      ],
+    },
+  ];
+
+  const result = asResult(buildInlineResult(posts));
+  assert.equal(result.type, "article");
+  assert.ok(
+    result.input_message_content?.message_text?.includes(
+      "fxtwitter.com/alice/status/20",
+    ),
+  );
+});

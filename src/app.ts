@@ -112,14 +112,17 @@ async function sendSingleMedia(
   tweetUrl: string,
 ): Promise<number> {
   const media = preview.media[0]!;
+  const spoiler = media.has_spoiler === true ? { has_spoiler: true } : {};
   const captionHtml = {
     caption: preview.html,
     parse_mode: "HTML" as const,
     reply_parameters: { message_id: replyToMessageId },
+    ...spoiler,
   };
   const captionText = {
     caption: preview.text,
     reply_parameters: { message_id: replyToMessageId },
+    ...spoiler,
   };
 
   try {

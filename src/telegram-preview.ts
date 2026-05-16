@@ -13,12 +13,14 @@ export type TelegramMediaGroupItem =
       media: string;
       caption?: string;
       parse_mode?: "HTML";
+      has_spoiler?: boolean;
     }
   | {
       type: "video" | "document";
       media: string;
       caption?: string;
       parse_mode?: "HTML";
+      has_spoiler?: boolean;
     };
 
 export type TelegramMediaGroupPreview = {
@@ -56,6 +58,9 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
     media: post.media.map((media, index) => ({
       type: media.kind === "animation" ? "document" : media.kind,
       media: media.url,
+      ...(media.kind !== "animation" && media.spoiler === true
+        ? { has_spoiler: true }
+        : {}),
       ...(index === 0 ? { caption: html, parse_mode: "HTML" as const } : {}),
     })),
   };

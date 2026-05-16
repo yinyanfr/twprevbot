@@ -55,6 +55,10 @@ export type FxTwitterStatus = {
   author: FxTwitterProfile;
   media: FxTwitterMedia;
   provider: "twitter";
+  possibly_sensitive?: boolean;
+  community?: {
+    is_nsfw?: boolean;
+  };
 };
 
 export type FxTwitterThreadResponse = {

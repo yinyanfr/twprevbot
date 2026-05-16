@@ -39,3 +39,53 @@ test("builds media group and puts caption only on first item", () => {
   );
   assert.equal(result.media[1]?.caption, undefined);
 });
+
+test("adds has_spoiler to photo and video media when spoiler is set", () => {
+  const result = buildTelegramPreview({
+    id: "20",
+    url: "https://x.com/a/status/20",
+    authorName: "Alice",
+    text: "sensitive",
+    media: [
+      {
+        kind: "photo",
+        url: "https://example.com/1.jpg",
+        spoiler: true,
+      },
+      {
+        kind: "video",
+        url: "https://example.com/2.mp4",
+        spoiler: true,
+      },
+    ],
+  });
+
+  assert.equal(result.kind, "mediaGroup");
+  const item0 = result.media[0];
+  const item1 = result.media[1];
+  assert.ok(item0);
+  assert.ok(item1);
+  assert.equal(item0.has_spoiler, true);
+  assert.equal(item1.has_spoiler, true);
+});
+
+test("does not add has_spoiler to animation/document media", () => {
+  const result = buildTelegramPreview({
+    id: "20",
+    url: "https://x.com/a/status/20",
+    authorName: "Alice",
+    text: "gif",
+    media: [
+      {
+        kind: "animation",
+        url: "https://example.com/1.gif",
+        spoiler: true,
+      },
+    ],
+  });
+
+  assert.equal(result.kind, "mediaGroup");
+  const item0 = result.media[0];
+  assert.ok(item0);
+  assert.equal(item0.has_spoiler, undefined);
+});

@@ -20,6 +20,10 @@ export function buildInlineResult(
 
   const media = post.media[0]!;
 
+  if (media.spoiler === true) {
+    return buildFxTwitterArticle(post);
+  }
+
   if (media.kind === "photo") {
     return buildPhotoResult(post, media.url);
   }

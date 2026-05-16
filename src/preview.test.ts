@@ -203,3 +203,75 @@ test("returns tombstone message for unavailable posts", () => {
     },
   ]);
 });
+
+test("marks media as spoiler when possibly_sensitive is true", () => {
+  const response: FxTwitterThreadResponse = {
+    code: 200,
+    author: null,
+    thread: null,
+    status: {
+      type: "status",
+      id: "20",
+      url: "https://x.com/a/status/20",
+      text: "sensitive",
+      provider: "twitter",
+      possibly_sensitive: true,
+      author: {
+        type: "profile",
+        id: "a",
+        name: "Alice",
+        screen_name: "alice",
+      },
+      media: {
+        photos: [
+          {
+            type: "photo",
+            url: "https://example.com/1.jpg",
+            width: 100,
+            height: 100,
+          },
+        ],
+      },
+    },
+  };
+
+  assert.deepEqual(normalizeThreadResponse(response)[0]?.media, [
+    { kind: "photo", url: "https://example.com/1.jpg", spoiler: true },
+  ]);
+});
+
+test("marks media as spoiler when community.is_nsfw is true", () => {
+  const response: FxTwitterThreadResponse = {
+    code: 200,
+    author: null,
+    thread: null,
+    status: {
+      type: "status",
+      id: "20",
+      url: "https://x.com/a/status/20",
+      text: "nsfw",
+      provider: "twitter",
+      community: { is_nsfw: true },
+      author: {
+        type: "profile",
+        id: "a",
+        name: "Alice",
+        screen_name: "alice",
+      },
+      media: {
+        photos: [
+          {
+            type: "photo",
+            url: "https://example.com/2.jpg",
+            width: 100,
+            height: 100,
+          },
+        ],
+      },
+    },
+  };
+
+  assert.deepEqual(normalizeThreadResponse(response)[0]?.media, [
+    { kind: "photo", url: "https://example.com/2.jpg", spoiler: true },
+  ]);
+});

@@ -13,12 +13,14 @@ export type PreviewMedia =
       kind: "photo";
       url: string;
       altText?: string;
+      spoiler?: boolean;
     }
   | {
       kind: "video" | "animation";
       url: string;
       altText?: string;
       thumbnailUrl?: string;
+      spoiler?: boolean;
     };
 
 export type PreviewPost = {
@@ -72,34 +74,41 @@ function normalizeItem(
     url: item.url,
     authorName: item.author.name,
     text: item.text,
-    media: normalizeMedia(item.media),
+    media: normalizeMedia(item.media, isSensitive(item)),
   };
 }
 
-function normalizeMedia(media: FxTwitterMedia): PreviewMedia[] {
+function isSensitive(item: FxTwitterStatus): boolean {
+  return item.possibly_sensitive === true || item.community?.is_nsfw === true;
+}
+
+function normalizeMedia(
+  media: FxTwitterMedia,
+  spoiler?: boolean,
+): PreviewMedia[] {
   const all = media.all ?? [...(media.photos ?? []), ...(media.videos ?? [])];
 
   return all.map((item) => {
+    const base = spoiler === true ? { spoiler } : {};
+
     if (isVideo(item)) {
       return {
         kind: item.type === "gif" ? ("animation" as const) : ("video" as const),
         url: selectVideoUrl(item),
+        ...base,
         ...(item.thumbnail_url !== undefined && item.thumbnail_url !== null
           ? { thumbnailUrl: item.thumbnail_url }
           : {}),
       };
     }
 
-    return normalizePhoto(item);
+    return {
+      kind: "photo",
+      url: item.url,
+      ...base,
+      ...(item.altText !== undefined ? { altText: item.altText } : {}),
+    };
   });
-}
-
-function normalizePhoto(photo: FxTwitterPhoto): PreviewMedia {
-  return {
-    kind: "photo",
-    url: photo.url,
-    ...(photo.altText !== undefined ? { altText: photo.altText } : {}),
-  };
 }
 
 function isVideo(
