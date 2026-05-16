@@ -25,14 +25,21 @@ bot.on("message:text", async (ctx) => {
   await ctx.replyWithChatAction("typing");
 
   for (const tweetUrl of tweetUrls) {
-    const response = await fetchTwitterThread(tweetUrl.id);
-    const posts = normalizeThreadResponse(response);
+    try {
+      const response = await fetchTwitterThread(tweetUrl.id);
+      const posts = normalizeThreadResponse(response);
 
-    let replyToMessageId = ctx.message.message_id;
+      let replyToMessageId = ctx.message.message_id;
 
-    for (const post of posts) {
-      const sentMessageId = await sendPreview(ctx, post, replyToMessageId);
-      replyToMessageId = sentMessageId;
+      for (const post of posts) {
+        const sentMessageId = await sendPreview(ctx, post, replyToMessageId);
+        replyToMessageId = sentMessageId;
+      }
+    } catch (error) {
+      console.error(`Failed to process ${tweetUrl.id}:`, error);
+      await ctx.reply(`读取失败：${tweetUrl.url}`, {
+        reply_parameters: { message_id: ctx.message.message_id },
+      });
     }
   }
 });
