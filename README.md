@@ -34,7 +34,8 @@ TGBOTNAME=<your-bot-username>
 
 ```bash
 npm run build     # compile TypeScript (src/ → dist/)
-node dist/app.js  # run the bot
+node dist/app.js  # run manually
+npm run serve     # build & start via pm2
 ```
 
 The bot listens in chats for Twitter/X status links and replies with formatted previews.
@@ -59,6 +60,7 @@ Inline mode must be enabled in [@BotFather](https://t.me/BotFather) with `/setin
 | `npm run format`       | Format with Prettier        |
 | `npm run format:check` | Check formatting            |
 | `npm test`             | Build then run node:test    |
+| `npm run serve`        | Build & start via pm2       |
 
 ## Architecture
 

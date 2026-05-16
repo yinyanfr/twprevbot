@@ -9,6 +9,7 @@ npm run lint          # eslint
 npm run format:check  # prettier check
 npm test              # build then run node:test on dist/
 node dist/app.js      # run
+npm run serve          # build & start via pm2
 ```
 
 ## Architecture
