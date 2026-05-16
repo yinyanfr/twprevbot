@@ -1,10 +1,11 @@
-import { autoRetry } from "@grammyjs/auto-retry";
 import { Bot, type Context } from "grammy";
+import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./config.js";
 import { fetchTwitterThread } from "./fx-twitter.js";
 import { normalizeThreadResponse } from "./preview.js";
 import type { PreviewPost } from "./preview.js";
 import { buildTelegramPreview } from "./telegram-preview.js";
+import type { TelegramMediaGroupItem } from "./telegram-preview.js";
 import { extractTweetUrls } from "./twitter-url.js";
 
 const config = loadConfig();
@@ -57,17 +58,91 @@ async function sendPreview(
     }
   }
 
+  if (preview.media.length === 1) {
+    return await sendSingleMedia(ctx, preview, replyToMessageId, post.url);
+  }
+
+  return await sendMediaGroup(ctx, preview, replyToMessageId, post.url);
+}
+
+async function sendSingleMedia(
+  ctx: Context,
+  preview: { html: string; text: string; media: TelegramMediaGroupItem[] },
+  replyToMessageId: number,
+  tweetUrl: string,
+): Promise<number> {
+  const media = preview.media[0]!;
+  const captionHtml = {
+    caption: preview.html,
+    parse_mode: "HTML" as const,
+    reply_parameters: { message_id: replyToMessageId },
+  };
+  const captionText = {
+    caption: preview.text,
+    reply_parameters: { message_id: replyToMessageId },
+  };
+
+  try {
+    const message = await sendOne(ctx, media, captionHtml);
+    return message.message_id;
+  } catch {
+    try {
+      const message = await sendOne(ctx, media, captionText);
+      return message.message_id;
+    } catch {
+      const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
+        reply_parameters: { message_id: replyToMessageId },
+      });
+      return message.message_id;
+    }
+  }
+}
+
+async function sendOne(
+  ctx: Context,
+  media: TelegramMediaGroupItem,
+  other: Record<string, unknown>,
+): Promise<{ message_id: number }> {
+  switch (media.type) {
+    case "photo":
+      return await ctx.replyWithPhoto(media.media, other);
+    case "video":
+      return await ctx.replyWithVideo(media.media, other);
+    case "document":
+      return await ctx.replyWithDocument(media.media, other);
+  }
+}
+
+async function sendMediaGroup(
+  ctx: Context,
+  preview: { html: string; text: string; media: TelegramMediaGroupItem[] },
+  replyToMessageId: number,
+  tweetUrl: string,
+): Promise<number> {
   try {
     const messages = await ctx.replyWithMediaGroup(preview.media, {
       reply_parameters: { message_id: replyToMessageId },
     });
-
     return messages.at(-1)?.message_id ?? replyToMessageId;
   } catch {
-    const message = await ctx.reply(`${preview.text}\n\n${post.url}`, {
-      reply_parameters: { message_id: replyToMessageId },
-    });
-    return message.message_id;
+    try {
+      const plainMedia: TelegramMediaGroupItem[] = preview.media.map(
+        (item, index) => ({
+          type: item.type,
+          media: item.media,
+          ...(index === 0 ? { caption: preview.text } : {}),
+        }),
+      );
+      const messages = await ctx.replyWithMediaGroup(plainMedia, {
+        reply_parameters: { message_id: replyToMessageId },
+      });
+      return messages.at(-1)?.message_id ?? replyToMessageId;
+    } catch {
+      const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
+        reply_parameters: { message_id: replyToMessageId },
+      });
+      return message.message_id;
+    }
   }
 }
 
