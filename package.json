@@ -1,0 +1,54 @@
+{
+  "name": "twprevbot",
+  "version": "0.0.1",
+  "description": "telegram twitter preview bot",
+  "homepage": "https://github.com/yinyanfr/twprevbot#readme",
+  "bugs": {
+    "url": "https://github.com/yinyanfr/twprevbot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yinyanfr/twprevbot.git"
+  },
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "main": "dist/app.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "serve": "npm run build && pm2 start ecosystem.config.cjs",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,mts,js,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.8.0",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.5",
+    "pm2": "^7.0.1",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3"
+  },
+  "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
+    "dotenv": "^17.4.2",
+    "grammy": "^1.43.0",
+    "pino": "^10.3.1"
+  }
+}
