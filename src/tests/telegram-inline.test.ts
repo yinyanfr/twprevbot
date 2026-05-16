@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInlineResult } from "./telegram-inline.js";
-import type { PreviewPost } from "./preview.js";
+import { buildInlineResult } from "../libs/telegram-inline.js";
+import type { PreviewPost } from "../libs/preview.js";
 
 type InlineResult = {
   type: string;

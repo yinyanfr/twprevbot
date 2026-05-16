@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { escapeHtml, formatTweetHtml, formatTweetText } from "./html.js";
+import { escapeHtml, formatTweetHtml, formatTweetText } from "../libs/html.js";
 
 test("escapes telegram html special characters", () => {
   assert.equal(escapeHtml("<a&b>"), "&lt;a&amp;b&gt;");

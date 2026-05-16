@@ -64,6 +64,33 @@ Inline mode must be enabled in [@BotFather](https://t.me/BotFather) with `/setin
 
 ## Architecture
 
+```
+src/
+├── app.ts              # bot entrypoint and handlers
+├── configs/
+│   └── index.ts        # env loading
+├── services/
+│   └── fx-twitter.ts   # FxTwitter API v2 client
+├── libs/
+│   ├── logger.ts       # pino logger
+│   ├── html.ts         # Telegram HTML formatters
+│   ├── twitter-url.ts  # tweet URL extraction
+│   ├── preview.ts      # normalize API responses to preview posts
+│   ├── telegram-preview.ts  # build regular chat preview payloads
+│   └── telegram-inline.ts   # build inline query results
+├── tests/
+│   ├── fx-twitter.test.ts
+│   ├── html.test.ts
+│   ├── preview.test.ts
+│   ├── telegram-preview.test.ts
+│   ├── telegram-inline.test.ts
+│   └── twitter-url.test.ts
+├── ecosystem.config.cjs
+├── eslint.config.mjs
+├── .prettierrc
+└── tsconfig.json
+```
+
 - ESM (`"type": "module"`) + TypeScript `module: nodenext`
 - `verbatimModuleSyntax` is on — use `import type` for type-only imports
 - Source in `src/`, compiled output in `dist/`

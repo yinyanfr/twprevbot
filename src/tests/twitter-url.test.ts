@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractTweetUrls } from "./twitter-url.js";
+import { extractTweetUrls } from "../libs/twitter-url.js";
 
 test("extracts tweet ids from twitter and x urls", () => {
   assert.deepEqual(

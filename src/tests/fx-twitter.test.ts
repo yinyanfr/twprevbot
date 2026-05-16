@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchTwitterThread } from "./fx-twitter.js";
+import { fetchTwitterThread } from "../services/fx-twitter.js";
 
 test("fetches /2/thread/{id}", async () => {
   const calls: string[] = [];

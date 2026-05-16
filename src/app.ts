@@ -1,14 +1,14 @@
 import { Bot, type Context } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
-import { loadConfig } from "./config.js";
-import { fetchTwitterThread } from "./fx-twitter.js";
-import { normalizeThreadResponse } from "./preview.js";
-import type { PreviewPost } from "./preview.js";
-import { buildTelegramPreview } from "./telegram-preview.js";
-import type { TelegramMediaGroupItem } from "./telegram-preview.js";
-import { buildInlineResult } from "./telegram-inline.js";
-import { extractTweetUrls } from "./twitter-url.js";
-import { logger } from "./logger.js";
+import { loadConfig } from "./configs/index.js";
+import { fetchTwitterThread } from "./services/fx-twitter.js";
+import { normalizeThreadResponse } from "./libs/preview.js";
+import type { PreviewPost } from "./libs/preview.js";
+import { buildTelegramPreview } from "./libs/telegram-preview.js";
+import type { TelegramMediaGroupItem } from "./libs/telegram-preview.js";
+import { buildInlineResult } from "./libs/telegram-inline.js";
+import { extractTweetUrls } from "./libs/twitter-url.js";
+import { logger } from "./libs/logger.js";
 
 const config = loadConfig();
 const bot = new Bot(config.botToken);

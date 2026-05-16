@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTelegramPreview } from "./telegram-preview.js";
+import { buildTelegramPreview } from "../libs/telegram-preview.js";
 
 test("builds text message for post without media", () => {
   assert.deepEqual(

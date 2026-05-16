@@ -6,7 +6,7 @@ import type {
   FxTwitterTombstone,
   FxTwitterVideo,
   FxTwitterVideoFormat,
-} from "./fx-twitter.js";
+} from "../services/fx-twitter.js";
 
 export type PreviewMedia =
   | {

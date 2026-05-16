@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeThreadResponse } from "./preview.js";
-import type { FxTwitterThreadResponse } from "./fx-twitter.js";
+import { normalizeThreadResponse } from "../libs/preview.js";
+import type { FxTwitterThreadResponse } from "../services/fx-twitter.js";
 
 test("uses full thread when present", () => {
   const response: FxTwitterThreadResponse = {
