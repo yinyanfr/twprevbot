@@ -10,6 +10,7 @@ Built with [grammy](https://grammy.dev), `@grammyjs/auto-retry`, and [FxTwitter 
 - Fetches tweet data and full thread chains via FxTwitter API
 - Sends previews with tweet text, author (linked), media, and image alt text
 - Thread tweets are sent as a Telegram reply chain from root to end
+- Sensitive/NSFW media marked with Telegram spoiler animation
 - Uses Telegram HTML formatting with plain-text fallback
 - Inline mode: type `@twprevbot <link>` in any chat to send a preview on your behalf
 
