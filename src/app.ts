@@ -8,6 +8,7 @@ import { buildTelegramPreview } from "./telegram-preview.js";
 import type { TelegramMediaGroupItem } from "./telegram-preview.js";
 import { buildInlineResult } from "./telegram-inline.js";
 import { extractTweetUrls } from "./twitter-url.js";
+import { logger } from "./logger.js";
 
 const config = loadConfig();
 const bot = new Bot(config.botToken);
@@ -36,7 +37,10 @@ bot.on("message:text", async (ctx) => {
         replyToMessageId = sentMessageId;
       }
     } catch (error) {
-      console.error(`Failed to process ${tweetUrl.id}:`, error);
+      logger.error(
+        { err: error, tweetId: tweetUrl.id },
+        "Failed to process tweet",
+      );
       await ctx.reply(`读取失败：${tweetUrl.url}`, {
         reply_parameters: { message_id: ctx.message.message_id },
       });
@@ -183,11 +187,11 @@ async function sendMediaGroup(
 }
 
 bot.catch((error) => {
-  console.error("Bot error:", error);
+  logger.error(error, "Bot error");
 });
 
 await bot.start({
   onStart(botInfo) {
-    console.log(`@${botInfo.username} is running`);
+    logger.info({ username: botInfo.username }, "Bot started");
   },
 });
