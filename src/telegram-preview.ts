@@ -15,7 +15,7 @@ export type TelegramMediaGroupItem =
       parse_mode?: "HTML";
     }
   | {
-      type: "video" | "animation";
+      type: "video" | "document";
       media: string;
       caption?: string;
       parse_mode?: "HTML";
@@ -54,7 +54,7 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
     html,
     text,
     media: post.media.map((media, index) => ({
-      type: media.kind,
+      type: media.kind === "animation" ? "document" : media.kind,
       media: media.url,
       ...(index === 0 ? { caption: html, parse_mode: "HTML" as const } : {}),
     })),
