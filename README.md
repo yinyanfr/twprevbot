@@ -11,6 +11,7 @@ Built with [grammy](https://grammy.dev), `@grammyjs/auto-retry`, and [FxTwitter 
 - Sends previews with tweet text, author (linked), media, and image alt text
 - Thread tweets are sent as a Telegram reply chain from root to end
 - Uses Telegram HTML formatting with plain-text fallback
+- Inline mode: type `@twprevbot <link>` in any chat to send a preview on your behalf
 
 ## Setup
 
@@ -29,10 +30,24 @@ TGBOTNAME=<your-bot-username>
 
 ## Usage
 
+### Chat Mode
+
 ```bash
 npm run build     # compile TypeScript (src/ → dist/)
 node dist/app.js  # run the bot
 ```
+
+The bot listens in chats for Twitter/X status links and replies with formatted previews.
+
+### Inline Mode
+
+In any chat, type `@twprevbot <link>` to send a preview as if from you:
+
+- Single tweet with photo or video → inline media result with caption
+- Single tweet without media → inline text result with HTML preview
+- Thread tweets or multiple media → fxtwitter.com link (let FxTwitter generate the preview)
+
+Inline mode must be enabled in [@BotFather](https://t.me/BotFather) with `/setinline`.
 
 ## Scripts
 

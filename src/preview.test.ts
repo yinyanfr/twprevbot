@@ -138,6 +138,48 @@ test("normalizes alt text and selects best mp4 video format", () => {
   ]);
 });
 
+test("includes thumbnail_url for video media", () => {
+  const response: FxTwitterThreadResponse = {
+    code: 200,
+    author: null,
+    thread: null,
+    status: {
+      type: "status",
+      id: "20",
+      url: "https://x.com/a/status/20",
+      text: "video",
+      provider: "twitter",
+      author: {
+        type: "profile",
+        id: "a",
+        name: "Alice",
+        screen_name: "alice",
+      },
+      media: {
+        videos: [
+          {
+            type: "video",
+            url: "https://example.com/v.mp4",
+            width: 100,
+            height: 100,
+            duration: 5,
+            thumbnail_url: "https://example.com/thumb.jpg",
+            formats: [{ url: "https://example.com/v.mp4" }],
+          },
+        ],
+      },
+    },
+  };
+
+  assert.deepEqual(normalizeThreadResponse(response)[0]?.media, [
+    {
+      kind: "video",
+      url: "https://example.com/v.mp4",
+      thumbnailUrl: "https://example.com/thumb.jpg",
+    },
+  ]);
+});
+
 test("returns tombstone message for unavailable posts", () => {
   const response: FxTwitterThreadResponse = {
     code: 404,

@@ -18,6 +18,7 @@ export type PreviewMedia =
       kind: "video" | "animation";
       url: string;
       altText?: string;
+      thumbnailUrl?: string;
     };
 
 export type PreviewPost = {
@@ -83,6 +84,9 @@ function normalizeMedia(media: FxTwitterMedia): PreviewMedia[] {
       return {
         kind: item.type === "gif" ? ("animation" as const) : ("video" as const),
         url: selectVideoUrl(item),
+        ...(item.thumbnail_url !== undefined && item.thumbnail_url !== null
+          ? { thumbnailUrl: item.thumbnail_url }
+          : {}),
       };
     }
 

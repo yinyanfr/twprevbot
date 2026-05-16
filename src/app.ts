@@ -6,6 +6,7 @@ import { normalizeThreadResponse } from "./preview.js";
 import type { PreviewPost } from "./preview.js";
 import { buildTelegramPreview } from "./telegram-preview.js";
 import type { TelegramMediaGroupItem } from "./telegram-preview.js";
+import { buildInlineResult } from "./telegram-inline.js";
 import { extractTweetUrls } from "./twitter-url.js";
 
 const config = loadConfig();
@@ -34,6 +35,34 @@ bot.on("message:text", async (ctx) => {
       replyToMessageId = sentMessageId;
     }
   }
+});
+
+bot.on("inline_query", async (ctx) => {
+  const query = ctx.inlineQuery.query;
+  const tweetUrls = extractTweetUrls(query);
+
+  if (tweetUrls.length === 0) {
+    await ctx.answerInlineQuery([], {
+      button: {
+        text: "发送 Twitter/X 链接以生成预览",
+        start_parameter: "inline",
+      },
+    });
+    return;
+  }
+
+  const tweetUrl = tweetUrls[0]!;
+  const response = await fetchTwitterThread(tweetUrl.id);
+  const posts = normalizeThreadResponse(response);
+  const result = buildInlineResult(posts);
+
+  if (result === null) {
+    await ctx.answerInlineQuery([]);
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await ctx.answerInlineQuery([result as any]);
 });
 
 async function sendPreview(

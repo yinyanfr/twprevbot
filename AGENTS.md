@@ -25,7 +25,9 @@ node dist/app.js      # run
   - `preview.ts` — normalize API responses into `PreviewPost[]`
   - `html.ts` — Telegram HTML formatting helpers
   - `telegram-preview.ts` — build send payloads (text / mediaGroup)
+  - `telegram-inline.ts` — build inline query results (article/photo/video)
   - `app.ts` — bot wiring and runtime
+- Inline mode constraints: Telegram inline cannot send media groups or reply chains. Thread and multi-media tweets fall back to an `fxtwitter.com` link. Video results need `thumbnail_url` from FxTwitter; missing thumbnail falls back to fxtwitter link. Inline mode must be enabled via BotFather `/setinline`.
 - Tests (`*.test.ts`) use `node:test` + `node:assert/strict`. Run via `npm test` (which runs `npm run build && node --test "dist/**/*.test.js"`).
 
 ## Environment
