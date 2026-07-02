@@ -14,7 +14,16 @@ import type { PreviewPost, TelegramMediaGroupItem } from "./libs/index.js";
 const config = loadConfig();
 const bot = new Bot(config.botToken);
 
-bot.api.config.use(autoRetry());
+const TELEGRAM_RETRY_OPTIONS = {
+  maxRetryAttempts: 2,
+  maxDelaySeconds: 30,
+};
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
+const MEMORY_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
+bot.api.config.use(autoRetry(TELEGRAM_RETRY_OPTIONS));
+
+startMemoryMetricsLogging();
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
@@ -113,6 +122,7 @@ async function sendSingleMedia(
   tweetUrl: string,
 ): Promise<number> {
   const media = preview.media[0]!;
+  let uploadedMedia: InputFile | undefined;
   const spoiler = media.has_spoiler === true ? { has_spoiler: true } : {};
   const captionHtml = {
     caption: preview.html,
@@ -150,7 +160,7 @@ async function sendSingleMedia(
       );
 
       try {
-        const uploadedMedia = await downloadMedia(media.media, media.type);
+        uploadedMedia ??= await downloadMedia(media.media, media.type);
         const message = await sendOne(
           ctx,
           media.type,
@@ -170,7 +180,7 @@ async function sendSingleMedia(
         );
 
         try {
-          const uploadedMedia = await downloadMedia(media.media, media.type);
+          uploadedMedia ??= await downloadMedia(media.media, media.type);
           const message = await sendOne(
             ctx,
             media.type,
@@ -219,9 +229,12 @@ async function downloadMedia(
   url: string,
   mediaType: TelegramMediaGroupItem["type"],
 ): Promise<InputFile> {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(MEDIA_DOWNLOAD_TIMEOUT_MS),
+  });
 
   if (!response.ok) {
+    await cancelResponseBody(response);
     throw new Error(
       `Failed to download media: ${response.status} ${response.statusText}`,
     );
@@ -229,6 +242,14 @@ async function downloadMedia(
 
   const bytes = Buffer.from(await response.arrayBuffer());
   return new InputFile(bytes, buildMediaFilename(url, mediaType));
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Ignore cancellation failures on already-closed bodies.
+  }
 }
 
 function buildMediaFilename(
@@ -308,6 +329,24 @@ async function sendMediaGroup(
 bot.catch((error) => {
   logger.error(error, "Bot error");
 });
+
+function startMemoryMetricsLogging(): void {
+  const timer = setInterval(() => {
+    const memory = process.memoryUsage();
+    logger.info(
+      {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external,
+        arrayBuffers: memory.arrayBuffers,
+      },
+      "Process memory snapshot",
+    );
+  }, MEMORY_LOG_INTERVAL_MS);
+
+  timer.unref();
+}
 
 await bot.start({
   onStart(botInfo) {
