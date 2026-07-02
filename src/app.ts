@@ -1,10 +1,11 @@
 import { Bot, type Context, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./configs/index.js";
-import { fetchTwitterThread } from "./services/index.js";
+import { fetchBilibiliPreview, fetchTwitterThread } from "./services/index.js";
 import {
   buildInlineResult,
   buildTelegramPreview,
+  extractBilibiliUrls,
   extractTweetUrls,
   logger,
   normalizeThreadResponse,
@@ -28,8 +29,9 @@ startMemoryMetricsLogging();
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
   const tweetUrls = extractTweetUrls(text);
+  const bilibiliUrls = extractBilibiliUrls(text);
 
-  if (tweetUrls.length === 0) {
+  if (tweetUrls.length === 0 && bilibiliUrls.length === 0) {
     return;
   }
 
@@ -52,6 +54,26 @@ bot.on("message:text", async (ctx) => {
         "Failed to process tweet",
       );
       await ctx.reply(`读取失败：${tweetUrl.url}`, {
+        reply_parameters: { message_id: ctx.message.message_id },
+      });
+    }
+  }
+
+  for (const bilibiliUrl of bilibiliUrls) {
+    try {
+      const post = await fetchBilibiliPreview(bilibiliUrl);
+
+      if (post === null) {
+        continue;
+      }
+
+      await sendPreview(ctx, post, ctx.message.message_id);
+    } catch (error) {
+      logger.error(
+        { err: error, bilibiliUrl: bilibiliUrl.url },
+        "Failed to process bilibili video",
+      );
+      await ctx.reply(`读取失败：${bilibiliUrl.url}`, {
         reply_parameters: { message_id: ctx.message.message_id },
       });
     }
@@ -136,6 +158,18 @@ async function sendSingleMedia(
     ...spoiler,
   };
 
+  if (media.forceUpload === true) {
+    return await sendSingleUploadedMedia(
+      ctx,
+      preview,
+      replyToMessageId,
+      tweetUrl,
+      media,
+      captionHtml,
+      captionText,
+    );
+  }
+
   try {
     const message = await sendOne(ctx, media.type, media.media, captionHtml);
     return message.message_id;
@@ -209,6 +243,63 @@ async function sendSingleMedia(
   }
 }
 
+async function sendSingleUploadedMedia(
+  ctx: Context,
+  preview: { html: string; text: string; media: TelegramMediaGroupItem[] },
+  replyToMessageId: number,
+  sourceUrl: string,
+  media: TelegramMediaGroupItem,
+  captionHtml: Record<string, unknown>,
+  captionText: Record<string, unknown>,
+): Promise<number> {
+  let uploadedMedia: InputFile | undefined;
+
+  try {
+    uploadedMedia ??= await downloadMedia(
+      media.media,
+      media.type,
+      media.downloadHeaders,
+    );
+    const message = await sendOne(ctx, media.type, uploadedMedia, captionHtml);
+    return message.message_id;
+  } catch (error) {
+    logger.warn(
+      { err: error, sourceUrl, mediaUrl: media.media, mediaType: media.type },
+      "Failed to upload downloaded media with HTML caption",
+    );
+
+    try {
+      uploadedMedia ??= await downloadMedia(
+        media.media,
+        media.type,
+        media.downloadHeaders,
+      );
+      const message = await sendOne(
+        ctx,
+        media.type,
+        uploadedMedia,
+        captionText,
+      );
+      return message.message_id;
+    } catch (plainUploadError) {
+      logger.warn(
+        {
+          err: plainUploadError,
+          sourceUrl,
+          mediaUrl: media.media,
+          mediaType: media.type,
+        },
+        "Failed to upload downloaded media with plain caption",
+      );
+
+      const message = await ctx.reply(`${preview.text}\n\n${sourceUrl}`, {
+        reply_parameters: { message_id: replyToMessageId },
+      });
+      return message.message_id;
+    }
+  }
+}
+
 async function sendOne(
   ctx: Context,
   mediaType: TelegramMediaGroupItem["type"],
@@ -228,8 +319,10 @@ async function sendOne(
 async function downloadMedia(
   url: string,
   mediaType: TelegramMediaGroupItem["type"],
+  headers?: Record<string, string>,
 ): Promise<InputFile> {
   const response = await fetch(url, {
+    ...(headers !== undefined ? { headers } : {}),
     signal: AbortSignal.timeout(MEDIA_DOWNLOAD_TIMEOUT_MS),
   });
 

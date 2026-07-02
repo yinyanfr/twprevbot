@@ -16,5 +16,8 @@ export type {
   TelegramTextPreview,
 } from "./telegram-preview.js";
 
+export { extractBilibiliUrls, parseBilibiliVideoUrl } from "./bilibili-url.js";
+export type { BilibiliUrl } from "./bilibili-url.js";
+
 export { extractTweetUrls } from "./twitter-url.js";
 export type { TweetUrl } from "./twitter-url.js";

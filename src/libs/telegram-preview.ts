@@ -14,6 +14,8 @@ export type TelegramMediaGroupItem =
       caption?: string;
       parse_mode?: "HTML";
       has_spoiler?: boolean;
+      downloadHeaders?: Record<string, string>;
+      forceUpload?: boolean;
     }
   | {
       type: "video" | "document";
@@ -21,6 +23,8 @@ export type TelegramMediaGroupItem =
       caption?: string;
       parse_mode?: "HTML";
       has_spoiler?: boolean;
+      downloadHeaders?: Record<string, string>;
+      forceUpload?: boolean;
     };
 
 export type TelegramMediaGroupPreview = {
@@ -58,6 +62,10 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
     media: post.media.map((media, index) => ({
       type: media.kind === "animation" ? "document" : media.kind,
       media: media.url,
+      ...(media.downloadHeaders !== undefined
+        ? { downloadHeaders: media.downloadHeaders }
+        : {}),
+      ...(media.forceUpload === true ? { forceUpload: true } : {}),
       ...(media.kind !== "animation" && media.spoiler === true
         ? { has_spoiler: true }
         : {}),

@@ -14,6 +14,8 @@ export type PreviewMedia =
       url: string;
       altText?: string;
       spoiler?: boolean;
+      downloadHeaders?: Record<string, string>;
+      forceUpload?: boolean;
     }
   | {
       kind: "video" | "animation";
@@ -21,6 +23,8 @@ export type PreviewMedia =
       altText?: string;
       thumbnailUrl?: string;
       spoiler?: boolean;
+      downloadHeaders?: Record<string, string>;
+      forceUpload?: boolean;
     };
 
 export type PreviewPost = {

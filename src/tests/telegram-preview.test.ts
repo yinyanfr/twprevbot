@@ -89,3 +89,31 @@ test("does not add has_spoiler to animation/document media", () => {
   assert.ok(item0);
   assert.equal(item0.has_spoiler, undefined);
 });
+
+test("passes through media download headers and force upload", () => {
+  const result = buildTelegramPreview({
+    id: "1",
+    url: "https://www.bilibili.com/video/BV1xx411c7mD/",
+    authorName: "Uploader",
+    text: "Title",
+    media: [
+      {
+        kind: "video",
+        url: "https://upos.example.com/video.mp4",
+        thumbnailUrl: "https://i0.hdslb.com/cover.jpg",
+        downloadHeaders: {
+          Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
+        },
+        forceUpload: true,
+      },
+    ],
+  });
+
+  assert.equal(result.kind, "mediaGroup");
+  const item0 = result.media[0];
+  assert.ok(item0);
+  assert.deepEqual(item0.downloadHeaders, {
+    Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
+  });
+  assert.equal(item0.forceUpload, true);
+});
