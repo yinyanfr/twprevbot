@@ -74,6 +74,7 @@ export type Fetcher = (
 ) => Promise<Response>;
 
 const FX_TWITTER_BASE_URL = "https://api.fxtwitter.com";
+const FX_TWITTER_TIMEOUT_MS = 10_000;
 
 export async function fetchTwitterThread(
   id: string,
@@ -96,10 +97,15 @@ async function fetchJson(
   url: string,
   fetcher: Fetcher,
 ): Promise<FxTwitterThreadResponse> {
-  const response = await fetcher(url);
+  const response = await fetcher(url, {
+    signal: AbortSignal.timeout(FX_TWITTER_TIMEOUT_MS),
+  });
   return (await response.json()) as FxTwitterThreadResponse;
 }
 
 function isNetworkError(error: unknown): boolean {
-  return error instanceof TypeError;
+  return (
+    error instanceof TypeError ||
+    (error instanceof DOMException && error.name === "TimeoutError")
+  );
 }

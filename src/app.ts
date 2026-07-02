@@ -1,4 +1,4 @@
-import { Bot, type Context } from "grammy";
+import { Bot, type Context, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./configs/index.js";
 import { fetchTwitterThread } from "./services/index.js";
@@ -14,7 +14,16 @@ import type { PreviewPost, TelegramMediaGroupItem } from "./libs/index.js";
 const config = loadConfig();
 const bot = new Bot(config.botToken);
 
-bot.api.config.use(autoRetry());
+const TELEGRAM_RETRY_OPTIONS = {
+  maxRetryAttempts: 2,
+  maxDelaySeconds: 30,
+};
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
+const MEMORY_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
+bot.api.config.use(autoRetry(TELEGRAM_RETRY_OPTIONS));
+
+startMemoryMetricsLogging();
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
@@ -113,6 +122,7 @@ async function sendSingleMedia(
   tweetUrl: string,
 ): Promise<number> {
   const media = preview.media[0]!;
+  let uploadedMedia: InputFile | undefined;
   const spoiler = media.has_spoiler === true ? { has_spoiler: true } : {};
   const captionHtml = {
     caption: preview.html,
@@ -127,33 +137,139 @@ async function sendSingleMedia(
   };
 
   try {
-    const message = await sendOne(ctx, media, captionHtml);
+    const message = await sendOne(ctx, media.type, media.media, captionHtml);
     return message.message_id;
-  } catch {
+  } catch (error) {
+    logger.warn(
+      { err: error, tweetUrl, mediaUrl: media.media, mediaType: media.type },
+      "Failed to send media with HTML caption",
+    );
+
     try {
-      const message = await sendOne(ctx, media, captionText);
+      const message = await sendOne(ctx, media.type, media.media, captionText);
       return message.message_id;
-    } catch {
-      const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
-        reply_parameters: { message_id: replyToMessageId },
-      });
-      return message.message_id;
+    } catch (retryError) {
+      logger.warn(
+        {
+          err: retryError,
+          tweetUrl,
+          mediaUrl: media.media,
+          mediaType: media.type,
+        },
+        "Failed to send media with plain caption",
+      );
+
+      try {
+        uploadedMedia ??= await downloadMedia(media.media, media.type);
+        const message = await sendOne(
+          ctx,
+          media.type,
+          uploadedMedia,
+          captionHtml,
+        );
+        return message.message_id;
+      } catch (uploadError) {
+        logger.warn(
+          {
+            err: uploadError,
+            tweetUrl,
+            mediaUrl: media.media,
+            mediaType: media.type,
+          },
+          "Failed to upload downloaded media with HTML caption",
+        );
+
+        try {
+          uploadedMedia ??= await downloadMedia(media.media, media.type);
+          const message = await sendOne(
+            ctx,
+            media.type,
+            uploadedMedia,
+            captionText,
+          );
+          return message.message_id;
+        } catch (plainUploadError) {
+          logger.warn(
+            {
+              err: plainUploadError,
+              tweetUrl,
+              mediaUrl: media.media,
+              mediaType: media.type,
+            },
+            "Failed to upload downloaded media with plain caption",
+          );
+
+          const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
+            reply_parameters: { message_id: replyToMessageId },
+          });
+          return message.message_id;
+        }
+      }
     }
   }
 }
 
 async function sendOne(
   ctx: Context,
-  media: TelegramMediaGroupItem,
+  mediaType: TelegramMediaGroupItem["type"],
+  media: string | InputFile,
   other: Record<string, unknown>,
 ): Promise<{ message_id: number }> {
-  switch (media.type) {
+  switch (mediaType) {
     case "photo":
-      return await ctx.replyWithPhoto(media.media, other);
+      return await ctx.replyWithPhoto(media, other);
     case "video":
-      return await ctx.replyWithVideo(media.media, other);
+      return await ctx.replyWithVideo(media, other);
     case "document":
-      return await ctx.replyWithDocument(media.media, other);
+      return await ctx.replyWithDocument(media, other);
+  }
+}
+
+async function downloadMedia(
+  url: string,
+  mediaType: TelegramMediaGroupItem["type"],
+): Promise<InputFile> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(MEDIA_DOWNLOAD_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    await cancelResponseBody(response);
+    throw new Error(
+      `Failed to download media: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const bytes = Buffer.from(await response.arrayBuffer());
+  return new InputFile(bytes, buildMediaFilename(url, mediaType));
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Ignore cancellation failures on already-closed bodies.
+  }
+}
+
+function buildMediaFilename(
+  url: string,
+  mediaType: TelegramMediaGroupItem["type"],
+): string {
+  const pathname = new URL(url).pathname;
+  const filename = pathname.split("/").at(-1);
+
+  if (filename !== undefined && filename.length > 0) {
+    return filename;
+  }
+
+  switch (mediaType) {
+    case "photo":
+      return "media.jpg";
+    case "video":
+      return "media.mp4";
+    case "document":
+      return "media.bin";
   }
 }
 
@@ -168,7 +284,17 @@ async function sendMediaGroup(
       reply_parameters: { message_id: replyToMessageId },
     });
     return messages.at(-1)?.message_id ?? replyToMessageId;
-  } catch {
+  } catch (error) {
+    logger.warn(
+      {
+        err: error,
+        tweetUrl,
+        mediaUrls: preview.media.map((item) => item.media),
+        mediaTypes: preview.media.map((item) => item.type),
+      },
+      "Failed to send media group with HTML caption",
+    );
+
     try {
       const plainMedia: TelegramMediaGroupItem[] = preview.media.map(
         (item, index) => ({
@@ -181,7 +307,17 @@ async function sendMediaGroup(
         reply_parameters: { message_id: replyToMessageId },
       });
       return messages.at(-1)?.message_id ?? replyToMessageId;
-    } catch {
+    } catch (retryError) {
+      logger.warn(
+        {
+          err: retryError,
+          tweetUrl,
+          mediaUrls: preview.media.map((item) => item.media),
+          mediaTypes: preview.media.map((item) => item.type),
+        },
+        "Failed to send media group with plain caption",
+      );
+
       const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
         reply_parameters: { message_id: replyToMessageId },
       });
@@ -193,6 +329,24 @@ async function sendMediaGroup(
 bot.catch((error) => {
   logger.error(error, "Bot error");
 });
+
+function startMemoryMetricsLogging(): void {
+  const timer = setInterval(() => {
+    const memory = process.memoryUsage();
+    logger.info(
+      {
+        rss: memory.rss,
+        heapUsed: memory.heapUsed,
+        heapTotal: memory.heapTotal,
+        external: memory.external,
+        arrayBuffers: memory.arrayBuffers,
+      },
+      "Process memory snapshot",
+    );
+  }, MEMORY_LOG_INTERVAL_MS);
+
+  timer.unref();
+}
 
 await bot.start({
   onStart(botInfo) {
