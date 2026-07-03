@@ -2,18 +2,13 @@ import { rm } from "node:fs/promises";
 import { Bot, type Context, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./configs/index.js";
-import {
-  fetchBilibiliPreview,
-  fetchTwitterThread,
-  fetchYouTubePreview,
-} from "./services/index.js";
+import { fetchBilibiliPreview, fetchTwitterThread } from "./services/index.js";
 import {
   buildInlineResult,
   buildAppendedMessage,
   buildTelegramPreview,
   extractBilibiliUrls,
   extractTweetUrls,
-  extractYouTubeUrls,
   getUploadedMediaFallbackTypes,
   logger,
   normalizeThreadResponse,
@@ -50,31 +45,23 @@ bot.on("message:text", (ctx) => {
   const text = ctx.message.text;
   const tweetUrls = extractTweetUrls(text);
   const bilibiliUrls = extractBilibiliUrls(text);
-  const youtubeUrls = extractYouTubeUrls(text);
 
-  if (
-    tweetUrls.length === 0 &&
-    bilibiliUrls.length === 0 &&
-    youtubeUrls.length === 0
-  ) {
+  if (tweetUrls.length === 0 && bilibiliUrls.length === 0) {
     return;
   }
 
-  void processMessageText(ctx, tweetUrls, bilibiliUrls, youtubeUrls).catch(
-    (error) => {
-      logger.error(
-        { err: error, messageId: ctx.message.message_id },
-        "Failed to process message text",
-      );
-    },
-  );
+  void processMessageText(ctx, tweetUrls, bilibiliUrls).catch((error) => {
+    logger.error(
+      { err: error, messageId: ctx.message.message_id },
+      "Failed to process message text",
+    );
+  });
 });
 
 async function processMessageText(
   ctx: Context & { message: { message_id: number } },
   tweetUrls: ReturnType<typeof extractTweetUrls>,
   bilibiliUrls: ReturnType<typeof extractBilibiliUrls>,
-  youtubeUrls: ReturnType<typeof extractYouTubeUrls>,
 ): Promise<void> {
   await ctx.replyWithChatAction("typing");
 
@@ -144,30 +131,6 @@ async function processMessageText(
         "Failed to process bilibili video",
       );
       await ctx.reply(`读取失败：${bilibiliUrl.url}`, {
-        reply_parameters: { message_id: ctx.message.message_id },
-      });
-    }
-  }
-
-  for (const youtubeUrl of youtubeUrls) {
-    try {
-      const post = await fetchYouTubePreview(youtubeUrl, {
-        ...(config.ytDlpPath !== undefined
-          ? { ytDlpPath: config.ytDlpPath }
-          : {}),
-      });
-
-      try {
-        await sendPreview(ctx, post, ctx.message.message_id);
-      } finally {
-        await cleanupPreviewFiles(post);
-      }
-    } catch (error) {
-      logger.error(
-        { err: error, youtubeUrl: youtubeUrl.url },
-        "Failed to process youtube video",
-      );
-      await ctx.reply(`读取失败：${youtubeUrl.url}`, {
         reply_parameters: { message_id: ctx.message.message_id },
       });
     }
@@ -263,6 +226,8 @@ async function sendSingleMedia(
     reply_parameters: { message_id: replyToMessageId },
     ...spoiler,
   };
+  const mediaCaptionHtml = withVideoDimensions(media, captionHtml);
+  const mediaCaptionText = withVideoDimensions(media, captionText);
 
   if (media.forceUpload === true) {
     return await sendSingleUploadedMedia(
@@ -271,13 +236,18 @@ async function sendSingleMedia(
       replyToMessageId,
       tweetUrl,
       media,
-      captionHtml,
-      captionText,
+      mediaCaptionHtml,
+      mediaCaptionText,
     );
   }
 
   try {
-    const message = await sendOne(ctx, media.type, media.media, captionHtml);
+    const message = await sendOne(
+      ctx,
+      media.type,
+      media.media,
+      mediaCaptionHtml,
+    );
     return {
       replyMessageId: message.message_id,
       appendTarget: {
@@ -292,7 +262,12 @@ async function sendSingleMedia(
     );
 
     try {
-      const message = await sendOne(ctx, media.type, media.media, captionText);
+      const message = await sendOne(
+        ctx,
+        media.type,
+        media.media,
+        mediaCaptionText,
+      );
       return {
         replyMessageId: message.message_id,
         appendTarget: {
@@ -317,7 +292,7 @@ async function sendSingleMedia(
           ctx,
           media.type,
           uploadedMedia,
-          captionHtml,
+          mediaCaptionHtml,
         );
         return {
           replyMessageId: message.message_id,
@@ -347,7 +322,7 @@ async function sendSingleMedia(
             ctx,
             media.type,
             uploadedMedia,
-            captionText,
+            mediaCaptionText,
           );
           return {
             replyMessageId: message.message_id,
@@ -389,6 +364,21 @@ async function sendSingleMedia(
       }
     }
   }
+}
+
+function withVideoDimensions(
+  media: TelegramMediaGroupItem,
+  options: Record<string, unknown>,
+): Record<string, unknown> {
+  if (media.type !== "video") {
+    return options;
+  }
+
+  return {
+    ...options,
+    ...(media.width !== undefined ? { width: media.width } : {}),
+    ...(media.height !== undefined ? { height: media.height } : {}),
+  };
 }
 
 async function sendSingleUploadedMedia(
