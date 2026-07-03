@@ -90,7 +90,7 @@ test("does not add has_spoiler to animation/document media", () => {
   assert.equal(item0.has_spoiler, undefined);
 });
 
-test("passes through media download headers and force upload", () => {
+test("passes through media download headers, local file path and force upload", () => {
   const result = buildTelegramPreview({
     id: "1",
     url: "https://www.bilibili.com/video/BV1xx411c7mD/",
@@ -104,6 +104,7 @@ test("passes through media download headers and force upload", () => {
         downloadHeaders: {
           Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
         },
+        localFilePath: "/tmp/video.mp4",
         forceUpload: true,
       },
     ],
@@ -115,5 +116,6 @@ test("passes through media download headers and force upload", () => {
   assert.deepEqual(item0.downloadHeaders, {
     Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
   });
+  assert.equal(item0.localFilePath, "/tmp/video.mp4");
   assert.equal(item0.forceUpload, true);
 });

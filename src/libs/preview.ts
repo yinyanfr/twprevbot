@@ -16,6 +16,7 @@ export type PreviewMedia =
       spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
+      localFilePath?: string;
     }
   | {
       kind: "video" | "animation";
@@ -25,6 +26,7 @@ export type PreviewMedia =
       spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
+      localFilePath?: string;
     };
 
 export type PreviewPost = {
@@ -33,6 +35,7 @@ export type PreviewPost = {
   authorName: string;
   text: string;
   media: PreviewMedia[];
+  cleanupPaths?: string[];
 };
 
 export function normalizeThreadResponse(

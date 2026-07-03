@@ -16,6 +16,7 @@ export type TelegramMediaGroupItem =
       has_spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
+      localFilePath?: string;
     }
   | {
       type: "video" | "document";
@@ -25,6 +26,7 @@ export type TelegramMediaGroupItem =
       has_spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
+      localFilePath?: string;
     };
 
 export type TelegramMediaGroupPreview = {
@@ -66,6 +68,9 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
         ? { downloadHeaders: media.downloadHeaders }
         : {}),
       ...(media.forceUpload === true ? { forceUpload: true } : {}),
+      ...(media.localFilePath !== undefined
+        ? { localFilePath: media.localFilePath }
+        : {}),
       ...(media.kind !== "animation" && media.spoiler === true
         ? { has_spoiler: true }
         : {}),

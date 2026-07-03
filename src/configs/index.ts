@@ -3,11 +3,13 @@ import "dotenv/config";
 export type AppConfig = {
   botToken: string;
   botName: string;
+  ytDlpPath?: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const botToken = env.TGBOTKEY;
   const botName = env.TGBOTNAME;
+  const ytDlpPath = env.YTDLP_PATH?.trim();
 
   if (botToken === undefined || botToken.length === 0) {
     throw new Error("Missing required environment variable TGBOTKEY");
@@ -17,5 +19,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error("Missing required environment variable TGBOTNAME");
   }
 
-  return { botToken, botName };
+  return {
+    botToken,
+    botName,
+    ...(ytDlpPath !== undefined && ytDlpPath !== "" ? { ytDlpPath } : {}),
+  };
 }

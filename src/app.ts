@@ -1,13 +1,19 @@
+import { rm } from "node:fs/promises";
 import { Bot, type Context, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./configs/index.js";
-import { fetchBilibiliPreview, fetchTwitterThread } from "./services/index.js";
+import {
+  fetchBilibiliPreview,
+  fetchTwitterThread,
+  fetchYouTubePreview,
+} from "./services/index.js";
 import {
   buildInlineResult,
   buildAppendedMessage,
   buildTelegramPreview,
   extractBilibiliUrls,
   extractTweetUrls,
+  extractYouTubeUrls,
   getUploadedMediaFallbackTypes,
   logger,
   normalizeThreadResponse,
@@ -44,8 +50,13 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
   const tweetUrls = extractTweetUrls(text);
   const bilibiliUrls = extractBilibiliUrls(text);
+  const youtubeUrls = extractYouTubeUrls(text);
 
-  if (tweetUrls.length === 0 && bilibiliUrls.length === 0) {
+  if (
+    tweetUrls.length === 0 &&
+    bilibiliUrls.length === 0 &&
+    youtubeUrls.length === 0
+  ) {
     return;
   }
 
@@ -79,9 +90,13 @@ bot.on("message:text", async (ctx) => {
           }
         }
 
-        const sentMessage = await sendPreview(ctx, post, replyToMessageId);
-        replyToMessageId = sentMessage.replyMessageId;
-        previousMessage = sentMessage;
+        try {
+          const sentMessage = await sendPreview(ctx, post, replyToMessageId);
+          replyToMessageId = sentMessage.replyMessageId;
+          previousMessage = sentMessage;
+        } finally {
+          await cleanupPreviewFiles(post);
+        }
       }
     } catch (error) {
       logger.error(
@@ -102,13 +117,41 @@ bot.on("message:text", async (ctx) => {
         continue;
       }
 
-      await sendPreview(ctx, post, ctx.message.message_id);
+      try {
+        await sendPreview(ctx, post, ctx.message.message_id);
+      } finally {
+        await cleanupPreviewFiles(post);
+      }
     } catch (error) {
       logger.error(
         { err: error, bilibiliUrl: bilibiliUrl.url },
         "Failed to process bilibili video",
       );
       await ctx.reply(`读取失败：${bilibiliUrl.url}`, {
+        reply_parameters: { message_id: ctx.message.message_id },
+      });
+    }
+  }
+
+  for (const youtubeUrl of youtubeUrls) {
+    try {
+      const post = await fetchYouTubePreview(youtubeUrl, {
+        ...(config.ytDlpPath !== undefined
+          ? { ytDlpPath: config.ytDlpPath }
+          : {}),
+      });
+
+      try {
+        await sendPreview(ctx, post, ctx.message.message_id);
+      } finally {
+        await cleanupPreviewFiles(post);
+      }
+    } catch (error) {
+      logger.error(
+        { err: error, youtubeUrl: youtubeUrl.url },
+        "Failed to process youtube video",
+      );
+      await ctx.reply(`读取失败：${youtubeUrl.url}`, {
         reply_parameters: { message_id: ctx.message.message_id },
       });
     }
@@ -345,11 +388,7 @@ async function sendSingleUploadedMedia(
   const uploadMediaTypes = getUploadedMediaFallbackTypes(media.type);
 
   try {
-    uploadedMedia ??= await downloadMedia(
-      media.media,
-      media.type,
-      media.downloadHeaders,
-    );
+    uploadedMedia ??= await getUploadedMedia(media);
     for (const uploadMediaType of uploadMediaTypes) {
       try {
         const message = await sendOne(
@@ -389,11 +428,7 @@ async function sendSingleUploadedMedia(
   }
 
   try {
-    uploadedMedia ??= await downloadMedia(
-      media.media,
-      media.type,
-      media.downloadHeaders,
-    );
+    uploadedMedia ??= await getUploadedMedia(media);
     for (const uploadMediaType of uploadMediaTypes) {
       try {
         const message = await sendOne(
@@ -451,6 +486,16 @@ async function sendSingleUploadedMedia(
       },
     },
   };
+}
+
+async function getUploadedMedia(
+  media: TelegramMediaGroupItem,
+): Promise<InputFile> {
+  if (media.localFilePath !== undefined) {
+    return new InputFile(media.localFilePath);
+  }
+
+  return await downloadMedia(media.media, media.type, media.downloadHeaders);
 }
 
 async function sendOne(
@@ -688,6 +733,19 @@ async function editSentMessage(
     caption: content,
     ...(mode === "html" ? { parse_mode: "HTML" as const } : {}),
   });
+}
+
+async function cleanupPreviewFiles(post: PreviewPost): Promise<void> {
+  for (const cleanupPath of post.cleanupPaths ?? []) {
+    try {
+      await rm(cleanupPath, { recursive: true, force: true });
+    } catch (error) {
+      logger.warn(
+        { err: error, cleanupPath, postUrl: post.url },
+        "Failed to clean up preview files",
+      );
+    }
+  }
 }
 
 bot.catch((error) => {

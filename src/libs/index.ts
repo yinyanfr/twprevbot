@@ -27,5 +27,8 @@ export type { AppendableMessage } from "./thread-append.js";
 export { extractBilibiliUrls, parseBilibiliVideoUrl } from "./bilibili-url.js";
 export type { BilibiliUrl } from "./bilibili-url.js";
 
+export { extractYouTubeUrls, parseYouTubeVideoUrl } from "./youtube-url.js";
+export type { YouTubeUrl } from "./youtube-url.js";
+
 export { extractTweetUrls } from "./twitter-url.js";
 export type { TweetUrl } from "./twitter-url.js";
