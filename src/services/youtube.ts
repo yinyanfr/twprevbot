@@ -42,6 +42,7 @@ type YouTubeDependencies = {
 
 const DEFAULT_YT_DLP_PATH = "yt-dlp";
 const YT_DLP_TIMEOUT_MS = 120_000;
+const YT_DLP_JS_RUNTIME = "node";
 const YOUTUBE_FORMAT =
   "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]/best[ext=mp4][acodec!=none]/best[acodec!=none]";
 const MEDIA_EXTENSIONS = new Set([".mp4", ".mkv", ".webm", ".mov", ".m4v"]);
@@ -93,6 +94,8 @@ async function fetchMetadata(
     "--dump-single-json",
     "--no-download",
     "--no-playlist",
+    "--js-runtimes",
+    YT_DLP_JS_RUNTIME,
     "--",
     source.url,
   ]);
@@ -117,6 +120,8 @@ async function downloadVideo(
     "--no-playlist",
     "--no-progress",
     "--no-part",
+    "--js-runtimes",
+    YT_DLP_JS_RUNTIME,
     "--restrict-filenames",
     "--output",
     outputTemplate,

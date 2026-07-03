@@ -59,7 +59,9 @@ test("fetches youtube preview and downloads media to a temp file", async () => {
       "--no-download",
       "--no-playlist",
     ]);
+    assert.deepEqual(calls[0]?.args.slice(3, 5), ["--js-runtimes", "node"]);
     assert.ok(calls[1]?.args.includes("--merge-output-format"));
+    assert.ok(calls[1]?.args.includes("--js-runtimes"));
     assert.deepEqual(result, {
       id: "dQw4w9WgXcQ",
       url: source.url,
