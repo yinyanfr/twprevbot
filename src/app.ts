@@ -46,7 +46,7 @@ bot.api.config.use(autoRetry(TELEGRAM_RETRY_OPTIONS));
 
 startMemoryMetricsLogging();
 
-bot.on("message:text", async (ctx) => {
+bot.on("message:text", (ctx) => {
   const text = ctx.message.text;
   const tweetUrls = extractTweetUrls(text);
   const bilibiliUrls = extractBilibiliUrls(text);
@@ -60,6 +60,22 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
+  void processMessageText(ctx, tweetUrls, bilibiliUrls, youtubeUrls).catch(
+    (error) => {
+      logger.error(
+        { err: error, messageId: ctx.message.message_id },
+        "Failed to process message text",
+      );
+    },
+  );
+});
+
+async function processMessageText(
+  ctx: Context & { message: { message_id: number } },
+  tweetUrls: ReturnType<typeof extractTweetUrls>,
+  bilibiliUrls: ReturnType<typeof extractBilibiliUrls>,
+  youtubeUrls: ReturnType<typeof extractYouTubeUrls>,
+): Promise<void> {
   await ctx.replyWithChatAction("typing");
 
   for (const tweetUrl of tweetUrls) {
@@ -156,7 +172,7 @@ bot.on("message:text", async (ctx) => {
       });
     }
   }
-});
+}
 
 bot.on("inline_query", async (ctx) => {
   const query = ctx.inlineQuery.query;

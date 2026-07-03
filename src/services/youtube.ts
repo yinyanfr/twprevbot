@@ -41,8 +41,8 @@ type YouTubeDependencies = {
 };
 
 const DEFAULT_YT_DLP_PATH = "yt-dlp";
-const YT_DLP_TIMEOUT_MS = 120_000;
-const YT_DLP_JS_RUNTIME = "node";
+const YT_DLP_TIMEOUT_MS = 300_000;
+const YT_DLP_JS_RUNTIME = `node:${process.execPath}`;
 const YOUTUBE_FORMAT =
   "bestvideo[ext=mp4][vcodec!=none]+bestaudio[ext=m4a][acodec!=none]/best[ext=mp4][acodec!=none]/best[acodec!=none]";
 const MEDIA_EXTENSIONS = new Set([".mp4", ".mkv", ".webm", ".mov", ".m4v"]);
@@ -215,9 +215,17 @@ async function runCommandWithExecFile(
       },
       (error, stdout, stderr) => {
         if (error !== null) {
+          const details = [
+            stderr || stdout,
+            error.signal !== null ? `signal: ${error.signal}` : "",
+            error.code !== null ? `code: ${String(error.code)}` : "",
+            error.killed ? "killed: true" : "",
+          ]
+            .filter((value) => value !== "")
+            .join("\n");
           reject(
             new Error(
-              `Command failed: ${basename(file)} ${args.join(" ")}\n${stderr || stdout}`,
+              `Command failed: ${basename(file)} ${args.join(" ")}\n${details}`,
             ),
           );
           return;
