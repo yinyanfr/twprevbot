@@ -23,6 +23,8 @@ export type TelegramMediaGroupItem =
       media: string;
       caption?: string;
       parse_mode?: "HTML";
+      width?: number;
+      height?: number;
       has_spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
@@ -70,6 +72,12 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
       ...(media.forceUpload === true ? { forceUpload: true } : {}),
       ...(media.localFilePath !== undefined
         ? { localFilePath: media.localFilePath }
+        : {}),
+      ...(media.kind !== "photo" && media.width !== undefined
+        ? { width: media.width }
+        : {}),
+      ...(media.kind !== "photo" && media.height !== undefined
+        ? { height: media.height }
         : {}),
       ...(media.kind !== "animation" && media.spoiler === true
         ? { has_spoiler: true }

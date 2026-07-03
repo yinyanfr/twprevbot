@@ -101,6 +101,8 @@ test("passes through media download headers, local file path and force upload", 
         kind: "video",
         url: "https://upos.example.com/video.mp4",
         thumbnailUrl: "https://i0.hdslb.com/cover.jpg",
+        width: 1920,
+        height: 1080,
         downloadHeaders: {
           Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
         },
@@ -116,6 +118,9 @@ test("passes through media download headers, local file path and force upload", 
   assert.deepEqual(item0.downloadHeaders, {
     Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
   });
+  assert.equal(item0.type, "video");
+  assert.equal(item0.width, 1920);
+  assert.equal(item0.height, 1080);
   assert.equal(item0.localFilePath, "/tmp/video.mp4");
   assert.equal(item0.forceUpload, true);
 });

@@ -16,6 +16,10 @@ type BilibiliViewPage = {
   cid: number;
   page: number;
   part: string;
+  dimension?: {
+    width?: number;
+    height?: number;
+  };
 };
 
 type BilibiliViewData = {
@@ -25,6 +29,10 @@ type BilibiliViewData = {
   pic: string;
   owner: {
     name: string;
+  };
+  dimension?: {
+    width?: number;
+    height?: number;
   };
   pages: BilibiliViewPage[];
 };
@@ -88,6 +96,16 @@ export async function fetchBilibiliPreview(
         kind: "video",
         url: videoUrl,
         thumbnailUrl: view.pic,
+        ...(page.dimension?.width !== undefined
+          ? { width: page.dimension.width }
+          : view.dimension?.width !== undefined
+            ? { width: view.dimension.width }
+            : {}),
+        ...(page.dimension?.height !== undefined
+          ? { height: page.dimension.height }
+          : view.dimension?.height !== undefined
+            ? { height: view.dimension.height }
+            : {}),
         downloadHeaders: mediaHeaders(canonicalUrl),
         forceUpload: true,
       },

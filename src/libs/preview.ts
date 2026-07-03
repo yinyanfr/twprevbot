@@ -23,6 +23,8 @@ export type PreviewMedia =
       url: string;
       altText?: string;
       thumbnailUrl?: string;
+      width?: number;
+      height?: number;
       spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;

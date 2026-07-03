@@ -30,7 +30,12 @@ test("fetches bilibili preview for direct video url", async () => {
             owner: { name: "Uploader" },
             pages: [
               { cid: 1, page: 1, part: "P1" },
-              { cid: 2, page: 2, part: "P2" },
+              {
+                cid: 2,
+                page: 2,
+                part: "P2",
+                dimension: { width: 1920, height: 1080 },
+              },
             ],
           },
         }),
@@ -74,6 +79,8 @@ test("fetches bilibili preview for direct video url", async () => {
         kind: "video",
         url: "https://upos.example.com/video.mp4",
         thumbnailUrl: "https://i0.hdslb.com/cover.jpg",
+        width: 1920,
+        height: 1080,
         downloadHeaders: {
           Referer: "https://www.bilibili.com/video/BV1xx411c7mD/?p=2",
           "User-Agent":
