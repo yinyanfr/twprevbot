@@ -213,8 +213,10 @@ function buildDescription(
   page: BilibiliViewPage,
 ): string {
   const parts = [title];
+  const trimmedTitle = title.trim();
+  const trimmedPart = page.part.trim();
 
-  if (page.part.trim() !== "") {
+  if (trimmedPart !== "" && trimmedPart !== trimmedTitle) {
     parts.push(`分P ${page.page}: ${page.part}`);
   }
 

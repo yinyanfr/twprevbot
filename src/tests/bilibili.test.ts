@@ -85,6 +85,50 @@ test("fetches bilibili preview for direct video url", async () => {
   });
 });
 
+test("omits duplicate page title when part matches the video title", async () => {
+  const source: BilibiliUrl = {
+    kind: "direct",
+    url: "https://www.bilibili.com/video/BV1xx411c7mD/",
+    page: 1,
+    bvid: "BV1xx411c7mD",
+  };
+  let calls = 0;
+  const fetcher = (): Promise<Response> => {
+    calls += 1;
+
+    if (calls === 1) {
+      return Promise.resolve(
+        Response.json({
+          code: 0,
+          message: "OK",
+          data: {
+            bvid: "BV1xx411c7mD",
+            title: "Same Title",
+            desc: "Desc",
+            pic: "https://i0.hdslb.com/cover.jpg",
+            owner: { name: "Uploader" },
+            pages: [{ cid: 1, page: 1, part: "Same Title" }],
+          },
+        }),
+      );
+    }
+
+    return Promise.resolve(
+      Response.json({
+        code: 0,
+        message: "OK",
+        data: {
+          durl: [{ url: "https://upos.example.com/video.mp4" }],
+        },
+      }),
+    );
+  };
+
+  const result = await fetchBilibiliPreview(source, fetcher);
+
+  assert.equal(result?.text, "Same Title\n\nDesc");
+});
+
 test("resolves b23 short url and ignores unsupported redirects", async () => {
   const fetcher = (input: string | URL): Promise<Response> => {
     if (String(input) === "https://b23.tv/good") {

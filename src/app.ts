@@ -7,6 +7,7 @@ import {
   buildTelegramPreview,
   extractBilibiliUrls,
   extractTweetUrls,
+  getUploadedMediaFallbackTypes,
   logger,
   normalizeThreadResponse,
 } from "./libs/index.js";
@@ -253,6 +254,7 @@ async function sendSingleUploadedMedia(
   captionText: Record<string, unknown>,
 ): Promise<number> {
   let uploadedMedia: InputFile | undefined;
+  const uploadMediaTypes = getUploadedMediaFallbackTypes(media.type);
 
   try {
     uploadedMedia ??= await downloadMedia(
@@ -260,44 +262,77 @@ async function sendSingleUploadedMedia(
       media.type,
       media.downloadHeaders,
     );
-    const message = await sendOne(ctx, media.type, uploadedMedia, captionHtml);
-    return message.message_id;
+    for (const uploadMediaType of uploadMediaTypes) {
+      try {
+        const message = await sendOne(
+          ctx,
+          uploadMediaType,
+          uploadedMedia,
+          captionHtml,
+        );
+        return message.message_id;
+      } catch (error) {
+        logger.warn(
+          {
+            err: error,
+            sourceUrl,
+            mediaUrl: media.media,
+            mediaType: uploadMediaType,
+          },
+          "Failed to upload downloaded media with HTML caption",
+        );
+      }
+    }
   } catch (error) {
     logger.warn(
       { err: error, sourceUrl, mediaUrl: media.media, mediaType: media.type },
-      "Failed to upload downloaded media with HTML caption",
+      "Failed to download media for upload",
     );
-
-    try {
-      uploadedMedia ??= await downloadMedia(
-        media.media,
-        media.type,
-        media.downloadHeaders,
-      );
-      const message = await sendOne(
-        ctx,
-        media.type,
-        uploadedMedia,
-        captionText,
-      );
-      return message.message_id;
-    } catch (plainUploadError) {
-      logger.warn(
-        {
-          err: plainUploadError,
-          sourceUrl,
-          mediaUrl: media.media,
-          mediaType: media.type,
-        },
-        "Failed to upload downloaded media with plain caption",
-      );
-
-      const message = await ctx.reply(`${preview.text}\n\n${sourceUrl}`, {
-        reply_parameters: { message_id: replyToMessageId },
-      });
-      return message.message_id;
-    }
   }
+
+  try {
+    uploadedMedia ??= await downloadMedia(
+      media.media,
+      media.type,
+      media.downloadHeaders,
+    );
+    for (const uploadMediaType of uploadMediaTypes) {
+      try {
+        const message = await sendOne(
+          ctx,
+          uploadMediaType,
+          uploadedMedia,
+          captionText,
+        );
+        return message.message_id;
+      } catch (plainUploadError) {
+        logger.warn(
+          {
+            err: plainUploadError,
+            sourceUrl,
+            mediaUrl: media.media,
+            mediaType: uploadMediaType,
+          },
+          "Failed to upload downloaded media with plain caption",
+        );
+      }
+    }
+  } catch (downloadError) {
+    logger.warn(
+      {
+        err: downloadError,
+        sourceUrl,
+        mediaUrl: media.media,
+        mediaType: media.type,
+      },
+      "Failed to download media for plain upload fallback",
+    );
+  }
+
+  const message = await ctx.reply(`${preview.text}\n\n${sourceUrl}`, {
+    reply_parameters: { message_id: replyToMessageId },
+  });
+  return message.message_id;
 }
 
 async function sendOne(

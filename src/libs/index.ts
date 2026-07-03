@@ -16,6 +16,8 @@ export type {
   TelegramTextPreview,
 } from "./telegram-preview.js";
 
+export { getUploadedMediaFallbackTypes } from "./upload-fallback.js";
+
 export { extractBilibiliUrls, parseBilibiliVideoUrl } from "./bilibili-url.js";
 export type { BilibiliUrl } from "./bilibili-url.js";
 
