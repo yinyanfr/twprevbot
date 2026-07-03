@@ -4,6 +4,7 @@ import { loadConfig } from "./configs/index.js";
 import { fetchBilibiliPreview, fetchTwitterThread } from "./services/index.js";
 import {
   buildInlineResult,
+  buildAppendedMessage,
   buildTelegramPreview,
   extractBilibiliUrls,
   extractTweetUrls,
@@ -12,6 +13,18 @@ import {
   normalizeThreadResponse,
 } from "./libs/index.js";
 import type { PreviewPost, TelegramMediaGroupItem } from "./libs/index.js";
+
+type SentMessage = {
+  replyMessageId: number;
+  appendTarget?: {
+    messageId: number;
+    content: {
+      kind: "text" | "caption";
+      html: string;
+      text: string;
+    };
+  };
+};
 
 const config = loadConfig();
 const bot = new Bot(config.botToken);
@@ -44,10 +57,31 @@ bot.on("message:text", async (ctx) => {
       const posts = normalizeThreadResponse(response);
 
       let replyToMessageId = ctx.message.message_id;
+      let previousMessage: SentMessage | undefined;
 
       for (const post of posts) {
-        const sentMessageId = await sendPreview(ctx, post, replyToMessageId);
-        replyToMessageId = sentMessageId;
+        if (
+          post.media.length === 0 &&
+          previousMessage?.appendTarget !== undefined
+        ) {
+          const appendedMessage = await appendTextToPreviousMessage(
+            ctx,
+            previousMessage.appendTarget,
+            post,
+          );
+
+          if (appendedMessage !== undefined) {
+            previousMessage = {
+              ...previousMessage,
+              appendTarget: appendedMessage,
+            };
+            continue;
+          }
+        }
+
+        const sentMessage = await sendPreview(ctx, post, replyToMessageId);
+        replyToMessageId = sentMessage.replyMessageId;
+        previousMessage = sentMessage;
       }
     } catch (error) {
       logger.error(
@@ -113,7 +147,7 @@ async function sendPreview(
   ctx: Context,
   post: PreviewPost,
   replyToMessageId: number,
-): Promise<number> {
+): Promise<SentMessage> {
   const preview = buildTelegramPreview(post);
 
   if (preview.kind === "text") {
@@ -122,12 +156,24 @@ async function sendPreview(
         parse_mode: "HTML",
         reply_parameters: { message_id: replyToMessageId },
       });
-      return message.message_id;
+      return {
+        replyMessageId: message.message_id,
+        appendTarget: {
+          messageId: message.message_id,
+          content: { kind: "text", html: preview.html, text: preview.text },
+        },
+      };
     } catch {
       const message = await ctx.reply(preview.text, {
         reply_parameters: { message_id: replyToMessageId },
       });
-      return message.message_id;
+      return {
+        replyMessageId: message.message_id,
+        appendTarget: {
+          messageId: message.message_id,
+          content: { kind: "text", html: preview.html, text: preview.text },
+        },
+      };
     }
   }
 
@@ -143,7 +189,7 @@ async function sendSingleMedia(
   preview: { html: string; text: string; media: TelegramMediaGroupItem[] },
   replyToMessageId: number,
   tweetUrl: string,
-): Promise<number> {
+): Promise<SentMessage> {
   const media = preview.media[0]!;
   let uploadedMedia: InputFile | undefined;
   const spoiler = media.has_spoiler === true ? { has_spoiler: true } : {};
@@ -173,7 +219,13 @@ async function sendSingleMedia(
 
   try {
     const message = await sendOne(ctx, media.type, media.media, captionHtml);
-    return message.message_id;
+    return {
+      replyMessageId: message.message_id,
+      appendTarget: {
+        messageId: message.message_id,
+        content: { kind: "caption", html: preview.html, text: preview.text },
+      },
+    };
   } catch (error) {
     logger.warn(
       { err: error, tweetUrl, mediaUrl: media.media, mediaType: media.type },
@@ -182,7 +234,13 @@ async function sendSingleMedia(
 
     try {
       const message = await sendOne(ctx, media.type, media.media, captionText);
-      return message.message_id;
+      return {
+        replyMessageId: message.message_id,
+        appendTarget: {
+          messageId: message.message_id,
+          content: { kind: "caption", html: preview.html, text: preview.text },
+        },
+      };
     } catch (retryError) {
       logger.warn(
         {
@@ -202,7 +260,17 @@ async function sendSingleMedia(
           uploadedMedia,
           captionHtml,
         );
-        return message.message_id;
+        return {
+          replyMessageId: message.message_id,
+          appendTarget: {
+            messageId: message.message_id,
+            content: {
+              kind: "caption",
+              html: preview.html,
+              text: preview.text,
+            },
+          },
+        };
       } catch (uploadError) {
         logger.warn(
           {
@@ -222,7 +290,17 @@ async function sendSingleMedia(
             uploadedMedia,
             captionText,
           );
-          return message.message_id;
+          return {
+            replyMessageId: message.message_id,
+            appendTarget: {
+              messageId: message.message_id,
+              content: {
+                kind: "caption",
+                html: preview.html,
+                text: preview.text,
+              },
+            },
+          };
         } catch (plainUploadError) {
           logger.warn(
             {
@@ -237,7 +315,17 @@ async function sendSingleMedia(
           const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
             reply_parameters: { message_id: replyToMessageId },
           });
-          return message.message_id;
+          return {
+            replyMessageId: message.message_id,
+            appendTarget: {
+              messageId: message.message_id,
+              content: {
+                kind: "text",
+                html: `${preview.html}\n\n${tweetUrl}`,
+                text: `${preview.text}\n\n${tweetUrl}`,
+              },
+            },
+          };
         }
       }
     }
@@ -252,7 +340,7 @@ async function sendSingleUploadedMedia(
   media: TelegramMediaGroupItem,
   captionHtml: Record<string, unknown>,
   captionText: Record<string, unknown>,
-): Promise<number> {
+): Promise<SentMessage> {
   let uploadedMedia: InputFile | undefined;
   const uploadMediaTypes = getUploadedMediaFallbackTypes(media.type);
 
@@ -270,7 +358,17 @@ async function sendSingleUploadedMedia(
           uploadedMedia,
           captionHtml,
         );
-        return message.message_id;
+        return {
+          replyMessageId: message.message_id,
+          appendTarget: {
+            messageId: message.message_id,
+            content: {
+              kind: "caption",
+              html: preview.html,
+              text: preview.text,
+            },
+          },
+        };
       } catch (error) {
         logger.warn(
           {
@@ -304,7 +402,17 @@ async function sendSingleUploadedMedia(
           uploadedMedia,
           captionText,
         );
-        return message.message_id;
+        return {
+          replyMessageId: message.message_id,
+          appendTarget: {
+            messageId: message.message_id,
+            content: {
+              kind: "caption",
+              html: preview.html,
+              text: preview.text,
+            },
+          },
+        };
       } catch (plainUploadError) {
         logger.warn(
           {
@@ -332,7 +440,17 @@ async function sendSingleUploadedMedia(
   const message = await ctx.reply(`${preview.text}\n\n${sourceUrl}`, {
     reply_parameters: { message_id: replyToMessageId },
   });
-  return message.message_id;
+  return {
+    replyMessageId: message.message_id,
+    appendTarget: {
+      messageId: message.message_id,
+      content: {
+        kind: "text",
+        html: `${preview.html}\n\n${sourceUrl}`,
+        text: `${preview.text}\n\n${sourceUrl}`,
+      },
+    },
+  };
 }
 
 async function sendOne(
@@ -406,12 +524,19 @@ async function sendMediaGroup(
   preview: { html: string; text: string; media: TelegramMediaGroupItem[] },
   replyToMessageId: number,
   tweetUrl: string,
-): Promise<number> {
+): Promise<SentMessage> {
   try {
     const messages = await ctx.replyWithMediaGroup(preview.media, {
       reply_parameters: { message_id: replyToMessageId },
     });
-    return messages.at(-1)?.message_id ?? replyToMessageId;
+    const firstMessageId = messages[0]?.message_id ?? replyToMessageId;
+    return {
+      replyMessageId: messages.at(-1)?.message_id ?? replyToMessageId,
+      appendTarget: {
+        messageId: firstMessageId,
+        content: { kind: "caption", html: preview.html, text: preview.text },
+      },
+    };
   } catch (error) {
     logger.warn(
       {
@@ -434,7 +559,14 @@ async function sendMediaGroup(
       const messages = await ctx.replyWithMediaGroup(plainMedia, {
         reply_parameters: { message_id: replyToMessageId },
       });
-      return messages.at(-1)?.message_id ?? replyToMessageId;
+      const firstMessageId = messages[0]?.message_id ?? replyToMessageId;
+      return {
+        replyMessageId: messages.at(-1)?.message_id ?? replyToMessageId,
+        appendTarget: {
+          messageId: firstMessageId,
+          content: { kind: "caption", html: preview.html, text: preview.text },
+        },
+      };
     } catch (retryError) {
       logger.warn(
         {
@@ -449,9 +581,113 @@ async function sendMediaGroup(
       const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
         reply_parameters: { message_id: replyToMessageId },
       });
-      return message.message_id;
+      return {
+        replyMessageId: message.message_id,
+        appendTarget: {
+          messageId: message.message_id,
+          content: {
+            kind: "text",
+            html: `${preview.html}\n\n${tweetUrl}`,
+            text: `${preview.text}\n\n${tweetUrl}`,
+          },
+        },
+      };
     }
   }
+}
+
+async function appendTextToPreviousMessage(
+  ctx: Context,
+  appendTarget: SentMessage["appendTarget"],
+  post: PreviewPost,
+): Promise<SentMessage["appendTarget"] | undefined> {
+  if (appendTarget === undefined || ctx.chatId === undefined) {
+    return undefined;
+  }
+
+  const preview = buildTelegramPreview(post);
+
+  if (preview.kind !== "text") {
+    return undefined;
+  }
+
+  const appended = buildAppendedMessage(appendTarget.content, preview);
+
+  if (!appended.canUseHtml && !appended.canUseText) {
+    return undefined;
+  }
+
+  if (appended.canUseHtml) {
+    try {
+      await editSentMessage(
+        ctx,
+        appendTarget.messageId,
+        appendTarget.content.kind,
+        appended.html,
+        "html",
+      );
+      return {
+        messageId: appendTarget.messageId,
+        content: {
+          kind: appended.kind,
+          html: appended.html,
+          text: appended.text,
+        },
+      };
+    } catch (error) {
+      logger.warn(
+        { err: error, postUrl: post.url, messageId: appendTarget.messageId },
+        "Failed to append thread text with HTML formatting",
+      );
+    }
+  }
+
+  if (appended.canUseText) {
+    try {
+      await editSentMessage(
+        ctx,
+        appendTarget.messageId,
+        appendTarget.content.kind,
+        appended.text,
+        "text",
+      );
+      return {
+        messageId: appendTarget.messageId,
+        content: {
+          kind: appended.kind,
+          html: appended.html,
+          text: appended.text,
+        },
+      };
+    } catch (error) {
+      logger.warn(
+        { err: error, postUrl: post.url, messageId: appendTarget.messageId },
+        "Failed to append thread text with plain formatting",
+      );
+    }
+  }
+
+  return undefined;
+}
+
+async function editSentMessage(
+  ctx: Context,
+  messageId: number,
+  kind: "text" | "caption",
+  content: string,
+  mode: "html" | "text",
+): Promise<void> {
+  if (kind === "text") {
+    await ctx.api.editMessageText(ctx.chatId!, messageId, content, {
+      ...(mode === "html" ? { parse_mode: "HTML" as const } : {}),
+    });
+    return;
+  }
+
+  await ctx.api.editMessageCaption(ctx.chatId!, messageId, {
+    caption: content,
+    ...(mode === "html" ? { parse_mode: "HTML" as const } : {}),
+  });
 }
 
 bot.catch((error) => {

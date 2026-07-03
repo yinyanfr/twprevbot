@@ -17,6 +17,12 @@ export type {
 } from "./telegram-preview.js";
 
 export { getUploadedMediaFallbackTypes } from "./upload-fallback.js";
+export {
+  buildAppendedMessage,
+  TELEGRAM_CAPTION_LENGTH_LIMIT,
+  TELEGRAM_TEXT_LENGTH_LIMIT,
+} from "./thread-append.js";
+export type { AppendableMessage } from "./thread-append.js";
 
 export { extractBilibiliUrls, parseBilibiliVideoUrl } from "./bilibili-url.js";
 export type { BilibiliUrl } from "./bilibili-url.js";
