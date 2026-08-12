@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, join } from "node:path";
 import { logger } from "../libs/logger.js";
@@ -220,27 +220,27 @@ async function prepareBilibiliMediaWithSlot(
     (() => mkdtemp(join(tmpdir(), BILIBILI_TEMP_DIR_PREFIX)));
   const ytDlpPath = dependencies.ytDlpPath ?? DEFAULT_YT_DLP_PATH;
   const ffmpegPath = dependencies.ffmpegPath ?? DEFAULT_FFMPEG_PATH;
-  const cookieArgs = await buildCookieArgs(dependencies.cookieFile);
-  const metadataResult = await runCommand(ytDlpPath, [
-    "--dump-single-json",
-    "--no-download",
-    "--no-playlist",
-    ...cookieArgs,
-    "--",
-    canonicalUrl,
-  ]);
-  const metadata = parseYtDlpMetadata(metadataResult.stdout);
-  const selected = selectBilibiliFormats(
-    metadata,
-    dependencies.telegramLocalMode === true
-      ? LOCAL_TELEGRAM_MEDIA_LIMIT
-      : OFFICIAL_TELEGRAM_MEDIA_LIMIT,
-  );
   const tempDir = await createTempDir();
   const mergedPath = join(tempDir, `${bvid}-p${page.page}-merged.mp4`);
   const finalPath = join(tempDir, `${bvid}-p${page.page}.mp4`);
 
   try {
+    const cookieArgs = await buildCookieArgs(dependencies.cookieFile, tempDir);
+    const metadataResult = await runCommand(ytDlpPath, [
+      "--dump-single-json",
+      "--no-download",
+      "--no-playlist",
+      ...cookieArgs,
+      "--",
+      canonicalUrl,
+    ]);
+    const metadata = parseYtDlpMetadata(metadataResult.stdout);
+    const selected = selectBilibiliFormats(
+      metadata,
+      dependencies.telegramLocalMode === true
+        ? LOCAL_TELEGRAM_MEDIA_LIMIT
+        : OFFICIAL_TELEGRAM_MEDIA_LIMIT,
+    );
     await runCommand(ytDlpPath, [
       "--no-playlist",
       "--no-progress",
@@ -310,14 +310,19 @@ export async function cleanupStaleBilibiliTempDirs(
   );
 }
 
-async function buildCookieArgs(cookieFile?: string): Promise<string[]> {
+async function buildCookieArgs(
+  cookieFile: string | undefined,
+  tempDir: string,
+): Promise<string[]> {
   if (cookieFile === undefined || cookieFile === "") {
     return [];
   }
 
   try {
     await access(cookieFile);
-    return ["--cookies", cookieFile];
+    const writableCookieFile = join(tempDir, ".yt-dlp-cookies.txt");
+    await copyFile(cookieFile, writableCookieFile);
+    return ["--cookies", writableCookieFile];
   } catch {
     return [];
   }

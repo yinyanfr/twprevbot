@@ -134,7 +134,14 @@ test("fetches and prepares a Bilibili video for streaming upload", async () => {
       "--no-download",
       "--no-playlist",
     ]);
-    assert.ok(calls[0]?.args.includes("--cookies"));
+    const cookieIndex = calls[0]?.args.indexOf("--cookies") ?? -1;
+    const writableCookieFile = join(tempDir, ".yt-dlp-cookies.txt");
+    assert.equal(calls[0]?.args[cookieIndex + 1], writableCookieFile);
+    assert.equal(
+      calls[1]?.args[calls[1].args.indexOf("--cookies") + 1],
+      writableCookieFile,
+    );
+    await access(writableCookieFile);
     assert.ok(calls[1]?.args.includes("30080+30280"));
     const ffmpegLocationIndex =
       calls[1]?.args.indexOf("--ffmpeg-location") ?? -1;
@@ -305,6 +312,7 @@ test("uses lower bitrate AAC when it preserves a higher video quality", () => {
 });
 
 test("returns an HTML-capable text preview when media preparation fails", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
   const result = await fetchBilibiliPreview(
     {
       kind: "direct",
@@ -314,6 +322,7 @@ test("returns an HTML-capable text preview when media preparation fails", async 
     },
     () => Promise.resolve(viewResponse()),
     {
+      createTempDir: () => Promise.resolve(tempDir),
       runCommand: () => Promise.reject(new Error("media unavailable")),
     },
   );
@@ -325,6 +334,7 @@ test("returns an HTML-capable text preview when media preparation fails", async 
     text: "Title\n\n分P 1: P1\n\nDesc",
     media: [],
   });
+  await assert.rejects(access(tempDir));
 });
 
 test("cleans only stale Bilibili temp directories", async () => {
