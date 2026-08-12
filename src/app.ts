@@ -2,7 +2,11 @@ import { rm } from "node:fs/promises";
 import { Bot, type Context, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { loadConfig } from "./configs/index.js";
-import { fetchBilibiliPreview, fetchTwitterThread } from "./services/index.js";
+import {
+  cleanupStaleBilibiliTempDirs,
+  fetchBilibiliPreview,
+  fetchTwitterThread,
+} from "./services/index.js";
 import {
   buildInlineResult,
   buildAppendedMessage,
@@ -28,11 +32,19 @@ type SentMessage = {
 };
 
 const config = loadConfig();
-const bot = new Bot(config.botToken);
+const bot = new Bot(config.botToken, {
+  client: {
+    ...(config.telegramApiRoot !== undefined
+      ? { apiRoot: config.telegramApiRoot }
+      : {}),
+    ...(config.telegramLocalMode ? { timeoutSeconds: 60 * 60 } : {}),
+  },
+});
 
 const TELEGRAM_RETRY_OPTIONS = {
   maxRetryAttempts: 2,
   maxDelaySeconds: 30,
+  rethrowHttpErrors: true,
 };
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
 const MEMORY_LOG_INTERVAL_MS = 60 * 60 * 1000;
@@ -114,7 +126,18 @@ async function processMessageText(
 
   for (const bilibiliUrl of bilibiliUrls) {
     try {
-      const post = await fetchBilibiliPreview(bilibiliUrl);
+      const post = await fetchBilibiliPreview(bilibiliUrl, fetch, {
+        ...(config.bilibiliCookieFile !== undefined
+          ? { cookieFile: config.bilibiliCookieFile }
+          : {}),
+        ...(config.ytDlpPath !== undefined
+          ? { ytDlpPath: config.ytDlpPath }
+          : {}),
+        ...(config.ffmpegPath !== undefined
+          ? { ffmpegPath: config.ffmpegPath }
+          : {}),
+        telegramLocalMode: config.telegramLocalMode,
+      });
 
       if (post === null) {
         continue;
@@ -378,6 +401,11 @@ function withVideoDimensions(
     ...options,
     ...(media.width !== undefined ? { width: media.width } : {}),
     ...(media.height !== undefined ? { height: media.height } : {}),
+    ...(media.duration !== undefined ? { duration: media.duration } : {}),
+    ...(media.supportsStreaming === true ? { supports_streaming: true } : {}),
+    ...(media.thumbnailUrl !== undefined
+      ? { cover: media.thumbnailUrl.replace(/^http:/, "https:") }
+      : {}),
   };
 }
 
@@ -391,7 +419,10 @@ async function sendSingleUploadedMedia(
   captionText: Record<string, unknown>,
 ): Promise<SentMessage> {
   let uploadedMedia: InputFile | undefined;
-  const uploadMediaTypes = getUploadedMediaFallbackTypes(media.type);
+  const uploadMediaTypes =
+    media.type !== "photo" && media.allowDocumentFallback === false
+      ? [media.type]
+      : getUploadedMediaFallbackTypes(media.type);
 
   try {
     uploadedMedia ??= await getUploadedMedia(media);
@@ -430,6 +461,15 @@ async function sendSingleUploadedMedia(
     logger.warn(
       { err: error, sourceUrl, mediaUrl: media.media, mediaType: media.type },
       "Failed to download media for upload",
+    );
+  }
+
+  if (media.type !== "photo" && media.preserveHtmlCaption === true) {
+    return await sendHtmlTextFallback(
+      ctx,
+      preview,
+      replyToMessageId,
+      sourceUrl,
     );
   }
 
@@ -478,7 +518,7 @@ async function sendSingleUploadedMedia(
     );
   }
 
-  const message = await ctx.reply(`${preview.text}\n\n${sourceUrl}`, {
+  const message = await ctx.reply(preview.text, {
     reply_parameters: { message_id: replyToMessageId },
   });
   return {
@@ -487,11 +527,47 @@ async function sendSingleUploadedMedia(
       messageId: message.message_id,
       content: {
         kind: "text",
-        html: `${preview.html}\n\n${sourceUrl}`,
-        text: `${preview.text}\n\n${sourceUrl}`,
+        html: preview.html,
+        text: preview.text,
       },
     },
   };
+}
+
+async function sendHtmlTextFallback(
+  ctx: Context,
+  preview: { html: string; text: string },
+  replyToMessageId: number,
+  sourceUrl: string,
+): Promise<SentMessage> {
+  try {
+    const message = await ctx.reply(preview.html, {
+      parse_mode: "HTML",
+      reply_parameters: { message_id: replyToMessageId },
+    });
+    return {
+      replyMessageId: message.message_id,
+      appendTarget: {
+        messageId: message.message_id,
+        content: { kind: "text", html: preview.html, text: preview.text },
+      },
+    };
+  } catch (error) {
+    logger.warn(
+      { err: error, sourceUrl },
+      "Failed to send HTML media fallback",
+    );
+    const message = await ctx.reply(preview.text, {
+      reply_parameters: { message_id: replyToMessageId },
+    });
+    return {
+      replyMessageId: message.message_id,
+      appendTarget: {
+        messageId: message.message_id,
+        content: { kind: "text", html: preview.html, text: preview.text },
+      },
+    };
+  }
 }
 
 async function getUploadedMedia(
@@ -774,6 +850,12 @@ function startMemoryMetricsLogging(): void {
   }, MEMORY_LOG_INTERVAL_MS);
 
   timer.unref();
+}
+
+try {
+  await cleanupStaleBilibiliTempDirs();
+} catch (error) {
+  logger.warn({ err: error }, "Failed to clean up stale Bilibili temp files");
 }
 
 await bot.start({

@@ -103,11 +103,15 @@ test("passes through media download headers, local file path and force upload", 
         thumbnailUrl: "https://i0.hdslb.com/cover.jpg",
         width: 1920,
         height: 1080,
+        duration: 60,
+        supportsStreaming: true,
         downloadHeaders: {
           Referer: "https://www.bilibili.com/video/BV1xx411c7mD/",
         },
         localFilePath: "/tmp/video.mp4",
         forceUpload: true,
+        allowDocumentFallback: false,
+        preserveHtmlCaption: true,
       },
     ],
   });
@@ -121,6 +125,11 @@ test("passes through media download headers, local file path and force upload", 
   assert.equal(item0.type, "video");
   assert.equal(item0.width, 1920);
   assert.equal(item0.height, 1080);
+  assert.equal(item0.duration, 60);
+  assert.equal(item0.supportsStreaming, true);
+  assert.equal(item0.thumbnailUrl, "https://i0.hdslb.com/cover.jpg");
   assert.equal(item0.localFilePath, "/tmp/video.mp4");
   assert.equal(item0.forceUpload, true);
+  assert.equal(item0.allowDocumentFallback, false);
+  assert.equal(item0.preserveHtmlCaption, true);
 });

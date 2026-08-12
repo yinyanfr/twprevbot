@@ -1,5 +1,8 @@
 export { fetchTwitterThread } from "./fx-twitter.js";
-export { fetchBilibiliPreview } from "./bilibili.js";
+export {
+  cleanupStaleBilibiliTempDirs,
+  fetchBilibiliPreview,
+} from "./bilibili.js";
 export { fetchYouTubePreview } from "./youtube.js";
 export type {
   Fetcher,

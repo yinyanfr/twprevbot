@@ -25,10 +25,15 @@ export type TelegramMediaGroupItem =
       parse_mode?: "HTML";
       width?: number;
       height?: number;
+      duration?: number;
+      supportsStreaming?: boolean;
+      thumbnailUrl?: string;
       has_spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
       localFilePath?: string;
+      allowDocumentFallback?: boolean;
+      preserveHtmlCaption?: boolean;
     };
 
 export type TelegramMediaGroupPreview = {
@@ -78,6 +83,21 @@ export function buildTelegramPreview(post: PreviewPost): TelegramPreview {
         : {}),
       ...(media.kind !== "photo" && media.height !== undefined
         ? { height: media.height }
+        : {}),
+      ...(media.kind !== "photo" && media.duration !== undefined
+        ? { duration: media.duration }
+        : {}),
+      ...(media.kind !== "photo" && media.supportsStreaming === true
+        ? { supportsStreaming: true }
+        : {}),
+      ...(media.kind !== "photo" && media.thumbnailUrl !== undefined
+        ? { thumbnailUrl: media.thumbnailUrl }
+        : {}),
+      ...(media.kind !== "photo" && media.allowDocumentFallback === false
+        ? { allowDocumentFallback: false }
+        : {}),
+      ...(media.kind !== "photo" && media.preserveHtmlCaption === true
+        ? { preserveHtmlCaption: true }
         : {}),
       ...(media.kind !== "animation" && media.spoiler === true
         ? { has_spoiler: true }

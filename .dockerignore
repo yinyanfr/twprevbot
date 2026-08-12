@@ -1,0 +1,13 @@
+.git
+.github
+.husky
+.env
+.env.*
+!.env.example
+.secrets
+data
+deploy
+dist
+node_modules
+*.log
+.DS_Store

@@ -25,10 +25,14 @@ export type PreviewMedia =
       thumbnailUrl?: string;
       width?: number;
       height?: number;
+      duration?: number;
+      supportsStreaming?: boolean;
       spoiler?: boolean;
       downloadHeaders?: Record<string, string>;
       forceUpload?: boolean;
       localFilePath?: string;
+      allowDocumentFallback?: boolean;
+      preserveHtmlCaption?: boolean;
     };
 
 export type PreviewPost = {
