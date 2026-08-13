@@ -30,7 +30,6 @@ services:
       TGBOTNAME: ${TGBOTNAME:?TGBOTNAME is required}
       TELEGRAM_API_ROOT: http://telegram-bot-api:8081
       TELEGRAM_LOCAL_MODE: "true"
-      YTDLP_PATH: /usr/local/bin/yt-dlp
     volumes:
       - ./.secrets/bilibili.cookies.txt:/run/secrets/bilibili.cookies.txt:ro
       - ./data/tmp:/tmp

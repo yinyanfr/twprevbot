@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
-import { access, copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { readFile, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { logger } from "../libs/logger.js";
 import type { PreviewPost } from "../libs/preview.js";
 import type { BilibiliUrl } from "../libs/bilibili-url.js";
@@ -33,59 +36,71 @@ type BilibiliViewData = {
   title: string;
   desc: string;
   pic: string;
-  owner: {
-    name: string;
-  };
-  dimension?: {
-    width?: number;
-    height?: number;
-  };
+  owner: { name: string };
+  dimension?: { width?: number; height?: number };
   pages: BilibiliViewPage[];
 };
 
-type BilibiliFormat = {
-  format_id?: string;
-  vcodec?: string;
-  acodec?: string;
+export type BilibiliDashStream = {
+  id?: number;
+  baseUrl?: string;
+  base_url?: string;
+  backupUrl?: string[];
+  backup_url?: string[];
+  bandwidth?: number;
+  mimeType?: string;
+  mime_type?: string;
+  codecs?: string;
   width?: number;
   height?: number;
-  quality?: number;
-  tbr?: number;
-  abr?: number;
-  filesize?: number;
-  filesize_approx?: number;
+  codecid?: number;
 };
 
-type BilibiliYtDlpMetadata = {
-  duration?: number;
-  formats?: BilibiliFormat[];
+export type BilibiliPlayInfo = {
+  timelength?: number;
+  dash?: {
+    duration?: number;
+    video?: BilibiliDashStream[];
+    audio?: BilibiliDashStream[];
+  };
 };
 
-type CommandResult = {
-  stdout: string;
-  stderr: string;
+type SelectedBilibiliStreams = {
+  video: BilibiliDashStream;
+  audio: BilibiliDashStream;
+  estimatedBytes: number;
 };
+
+type CommandResult = { stdout: string; stderr: string };
 
 export type BilibiliCommandRunner = (
   file: string,
   args: string[],
 ) => Promise<CommandResult>;
 
+export type BilibiliStreamDownloader = (
+  urls: readonly string[],
+  destination: string,
+  headers: Record<string, string>,
+  maxBytes: number,
+  fetcher: Fetcher,
+) => Promise<number>;
+
 export type BilibiliDependencies = {
   runCommand?: BilibiliCommandRunner;
+  downloadStream?: BilibiliStreamDownloader;
   createTempDir?: () => Promise<string>;
   cookieFile?: string;
-  ytDlpPath?: string;
   ffmpegPath?: string;
   telegramLocalMode?: boolean;
 };
 
 const API_BASE_URL = "https://api.bilibili.com";
 const BILIBILI_TIMEOUT_MS = 10_000;
+const BILIBILI_DOWNLOAD_TIMEOUT_MS = 60 * 60_000;
 const BILIBILI_COMMAND_TIMEOUT_MS = 60 * 60_000;
 const OFFICIAL_TELEGRAM_MEDIA_LIMIT = 47 * 1024 * 1024;
 const LOCAL_TELEGRAM_MEDIA_LIMIT = 1900 * 1024 * 1024;
-const DEFAULT_YT_DLP_PATH = "yt-dlp";
 const DEFAULT_FFMPEG_PATH = "ffmpeg";
 const BILIBILI_TEMP_DIR_PREFIX = "twprevbot-bilibili-";
 const LONG_VIDEO_DURATION_SECONDS = 20 * 60;
@@ -105,6 +120,8 @@ export async function fetchBilibiliPreview(
     return null;
   }
 
+  const cookie = await readCookieHeader(dependencies.cookieFile);
+  const headers = defaultHeaders(cookie);
   const viewQuery =
     resolved.bvid !== undefined
       ? `bvid=${resolved.bvid}`
@@ -112,7 +129,7 @@ export async function fetchBilibiliPreview(
   const view = await fetchJson<BilibiliViewData>(
     `${API_BASE_URL}/x/web-interface/view?${viewQuery}`,
     fetcher,
-    defaultHeaders(),
+    headers,
   );
   const page = view.pages[resolved.page - 1] ?? view.pages[0];
 
@@ -128,6 +145,8 @@ export async function fetchBilibiliPreview(
       canonicalUrl,
       view.bvid,
       page,
+      headers,
+      fetcher,
       dependencies,
     );
   } catch (error) {
@@ -146,6 +165,7 @@ export async function fetchBilibiliPreview(
       media: [],
     };
   }
+
   const width = media.width ?? page.dimension?.width ?? view.dimension?.width;
   const height =
     media.height ?? page.dimension?.height ?? view.dimension?.height;
@@ -179,6 +199,8 @@ async function prepareBilibiliMedia(
   canonicalUrl: string,
   bvid: string,
   page: BilibiliViewPage,
+  headers: Record<string, string>,
+  fetcher: Fetcher,
   dependencies: BilibiliDependencies,
 ): Promise<{
   localFilePath: string;
@@ -188,69 +210,92 @@ async function prepareBilibiliMedia(
   duration?: number;
 }> {
   const runCommand = dependencies.runCommand ?? runCommandWithExecFile;
+  const downloadStream = dependencies.downloadStream ?? downloadBoundedStream;
   const createTempDir =
     dependencies.createTempDir ??
     (() => mkdtemp(join(tmpdir(), BILIBILI_TEMP_DIR_PREFIX)));
-  const ytDlpPath = dependencies.ytDlpPath ?? DEFAULT_YT_DLP_PATH;
   const ffmpegPath = dependencies.ffmpegPath ?? DEFAULT_FFMPEG_PATH;
+  const mediaLimit =
+    dependencies.telegramLocalMode === true
+      ? LOCAL_TELEGRAM_MEDIA_LIMIT
+      : OFFICIAL_TELEGRAM_MEDIA_LIMIT;
+  const duration = page.duration;
+  const maxHeight =
+    (duration ?? 0) >= LONG_VIDEO_DURATION_SECONDS
+      ? LONG_VIDEO_MAX_HEIGHT
+      : DEFAULT_MAX_VIDEO_HEIGHT;
+  const playUrl = new URL(`${API_BASE_URL}/x/player/playurl`);
+  playUrl.searchParams.set("bvid", bvid);
+  playUrl.searchParams.set("cid", String(page.cid));
+  playUrl.searchParams.set("qn", maxHeight === 720 ? "64" : "32");
+  playUrl.searchParams.set("fnver", "0");
+  playUrl.searchParams.set("fnval", "16");
+  playUrl.searchParams.set("fourk", "0");
+  playUrl.searchParams.set("platform", "web");
+  const playInfo = await fetchJson<BilibiliPlayInfo>(
+    playUrl.toString(),
+    fetcher,
+    headers,
+  );
+  const effectiveDuration =
+    duration ??
+    playInfo.dash?.duration ??
+    (playInfo.timelength !== undefined
+      ? playInfo.timelength / 1000
+      : undefined);
+  const selected = selectBilibiliFormats(
+    playInfo,
+    effectiveDuration,
+    mediaLimit,
+  );
   const tempDir = await createTempDir();
-  const mergedPath = join(tempDir, `${bvid}-p${page.page}-merged.mp4`);
+  const videoPath = join(tempDir, `${bvid}-p${page.page}-video.m4s`);
+  const audioPath = join(tempDir, `${bvid}-p${page.page}-audio.m4s`);
   const finalPath = join(tempDir, `${bvid}-p${page.page}.mp4`);
+  const downloadHeaders = {
+    "User-Agent": BILIBILI_USER_AGENT,
+    Referer: canonicalUrl,
+    Origin: "https://www.bilibili.com",
+  };
 
   try {
-    const cookieArgs = await buildCookieArgs(dependencies.cookieFile, tempDir);
-    const metadataResult = await runCommand(ytDlpPath, [
-      "--dump-single-json",
-      "--no-download",
-      "--no-playlist",
-      ...cookieArgs,
-      "--",
-      canonicalUrl,
-    ]);
-    const rawMetadata = parseYtDlpMetadata(metadataResult.stdout);
-    const metadata = {
-      ...rawMetadata,
-      ...(rawMetadata.duration === undefined && page.duration !== undefined
-        ? { duration: page.duration }
-        : {}),
-    };
-    const selected = selectBilibiliFormats(
-      metadata,
-      dependencies.telegramLocalMode === true
-        ? LOCAL_TELEGRAM_MEDIA_LIMIT
-        : OFFICIAL_TELEGRAM_MEDIA_LIMIT,
+    const audioBytes = await downloadStream(
+      streamUrls(selected.audio),
+      audioPath,
+      downloadHeaders,
+      mediaLimit,
+      fetcher,
     );
-    await runCommand(ytDlpPath, [
-      "--no-playlist",
-      "--no-progress",
-      "--no-part",
-      "--ffmpeg-location",
-      ffmpegPath,
-      ...cookieArgs,
-      "--format",
-      `${selected.video.format_id}+${selected.audio.format_id}`,
-      "--merge-output-format",
-      "mp4",
-      "--output",
-      mergedPath,
-      "--",
-      canonicalUrl,
-    ]);
-    const downloadedPath = await findDownloadedVideo(tempDir, mergedPath);
+    await downloadStream(
+      streamUrls(selected.video),
+      videoPath,
+      downloadHeaders,
+      mediaLimit - audioBytes,
+      fetcher,
+    );
     await runCommand(ffmpegPath, [
       "-y",
+      "-loglevel",
+      "error",
       "-i",
-      downloadedPath,
+      videoPath,
+      "-i",
+      audioPath,
       "-map",
       "0:v:0",
       "-map",
-      "0:a:0",
+      "1:a:0",
       "-c",
       "copy",
       "-movflags",
       "+faststart",
       finalPath,
     ]);
+
+    const finalSize = (await stat(finalPath)).size;
+    if (finalSize > mediaLimit) {
+      throw new Error("Prepared Bilibili media exceeds the upload limit");
+    }
 
     return {
       localFilePath: finalPath,
@@ -261,8 +306,8 @@ async function prepareBilibiliMedia(
       ...(selected.video.height !== undefined
         ? { height: selected.video.height }
         : {}),
-      ...(metadata.duration !== undefined
-        ? { duration: Math.round(metadata.duration) }
+      ...(effectiveDuration !== undefined
+        ? { duration: Math.round(effectiveDuration) }
         : {}),
     };
   } catch (error) {
@@ -271,11 +316,67 @@ async function prepareBilibiliMedia(
   }
 }
 
+export function selectBilibiliFormats(
+  playInfo: BilibiliPlayInfo,
+  duration: number | undefined,
+  mediaLimit: number,
+): SelectedBilibiliStreams {
+  const maxVideoHeight =
+    (duration ?? 0) >= LONG_VIDEO_DURATION_SECONDS
+      ? LONG_VIDEO_MAX_HEIGHT
+      : DEFAULT_MAX_VIDEO_HEIGHT;
+  const audios = (playInfo.dash?.audio ?? [])
+    .filter(
+      (stream) =>
+        streamBaseUrl(stream) !== undefined &&
+        streamCodecs(stream).startsWith("mp4a") &&
+        streamMimeType(stream) === "audio/mp4",
+    )
+    .sort((a, b) => (b.bandwidth ?? 0) - (a.bandwidth ?? 0));
+  const videos = (playInfo.dash?.video ?? [])
+    .filter(
+      (stream) =>
+        streamBaseUrl(stream) !== undefined &&
+        (streamCodecs(stream).startsWith("avc1") || stream.codecid === 7) &&
+        streamMimeType(stream) === "video/mp4" &&
+        stream.height !== undefined &&
+        stream.height <= maxVideoHeight,
+    )
+    .sort(
+      (a, b) =>
+        (b.height ?? 0) - (a.height ?? 0) ||
+        (b.bandwidth ?? 0) - (a.bandwidth ?? 0),
+    );
+
+  if (audios.length === 0) {
+    throw new Error("Bilibili did not provide a compatible AAC audio stream");
+  }
+
+  const selected = videos
+    .flatMap((video) =>
+      audios.map((audio) => ({
+        video,
+        audio,
+        estimatedBytes:
+          estimateStreamSize(video, duration) +
+          estimateStreamSize(audio, duration),
+      })),
+    )
+    .find((candidate) => candidate.estimatedBytes <= mediaLimit);
+
+  if (selected === undefined) {
+    throw new Error(
+      "Bilibili did not provide a compatible H.264 video stream within the upload limit",
+    );
+  }
+
+  return selected;
+}
+
 export async function cleanupStaleBilibiliTempDirs(
   root = tmpdir(),
 ): Promise<void> {
   const entries = await readdir(root, { withFileTypes: true });
-
   await Promise.all(
     entries
       .filter(
@@ -289,128 +390,116 @@ export async function cleanupStaleBilibiliTempDirs(
   );
 }
 
-async function buildCookieArgs(
-  cookieFile: string | undefined,
-  tempDir: string,
-): Promise<string[]> {
-  if (cookieFile === undefined || cookieFile === "") {
-    return [];
-  }
+async function downloadBoundedStream(
+  urls: readonly string[],
+  destination: string,
+  headers: Record<string, string>,
+  maxBytes: number,
+  fetcher: Fetcher,
+): Promise<number> {
+  let lastError: unknown;
 
-  try {
-    await access(cookieFile);
-    const writableCookieFile = join(tempDir, ".yt-dlp-cookies.txt");
-    await copyFile(cookieFile, writableCookieFile);
-    return ["--cookies", writableCookieFile];
-  } catch {
-    return [];
-  }
-}
+  for (const url of urls) {
+    try {
+      const response = await fetcher(url, {
+        headers,
+        signal: AbortSignal.timeout(BILIBILI_DOWNLOAD_TIMEOUT_MS),
+      });
+      if (!response.ok || response.body === null) {
+        await cancelResponseBody(response);
+        throw new Error(
+          `Bilibili media download failed: ${response.status} ${response.statusText}`,
+        );
+      }
 
-function parseYtDlpMetadata(stdout: string): BilibiliYtDlpMetadata {
-  try {
-    return JSON.parse(stdout) as BilibiliYtDlpMetadata;
-  } catch (error) {
-    throw new Error(
-      `Failed to parse Bilibili yt-dlp metadata: ${String(error)}`,
-      {
-        cause: error,
-      },
-    );
-  }
-}
+      const declaredSize = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredSize) && declaredSize > maxBytes) {
+        await cancelResponseBody(response);
+        throw new Error("Bilibili media stream exceeds the upload limit");
+      }
 
-export function selectBilibiliFormats(
-  metadata: BilibiliYtDlpMetadata,
-  mediaLimit: number,
-): {
-  video: BilibiliFormat & { format_id: string };
-  audio: BilibiliFormat & { format_id: string };
-} {
-  const formats = metadata.formats ?? [];
-  const audios = formats
-    .filter(
-      (format): format is BilibiliFormat & { format_id: string } =>
-        format.format_id !== undefined &&
-        format.vcodec === "none" &&
-        format.acodec?.startsWith("mp4a") === true,
-    )
-    .sort((a, b) => (b.abr ?? b.tbr ?? 0) - (a.abr ?? a.tbr ?? 0));
-
-  if (audios.length === 0) {
-    throw new Error("Bilibili did not provide a compatible AAC audio stream");
-  }
-
-  const duration = metadata.duration ?? 0;
-  const maxVideoHeight =
-    duration >= LONG_VIDEO_DURATION_SECONDS
-      ? LONG_VIDEO_MAX_HEIGHT
-      : DEFAULT_MAX_VIDEO_HEIGHT;
-  const videos = formats
-    .filter(
-      (format): format is BilibiliFormat & { format_id: string } =>
-        format.format_id !== undefined &&
-        format.vcodec?.startsWith("avc1") === true &&
-        format.acodec === "none" &&
-        format.height !== undefined &&
-        format.height <= maxVideoHeight,
-    )
-    .sort(
-      (a, b) =>
-        (b.height ?? 0) - (a.height ?? 0) ||
-        (b.quality ?? 0) - (a.quality ?? 0) ||
-        (b.tbr ?? 0) - (a.tbr ?? 0),
-    );
-  const selected = videos
-    .flatMap((video) =>
-      audios.map((audio) => ({
-        video,
-        audio,
-        size:
-          estimateFormatSize(video, duration) +
-          estimateFormatSize(audio, duration),
-      })),
-    )
-    .find((candidate) => candidate.size <= mediaLimit);
-
-  if (selected === undefined) {
-    throw new Error(
-      "Bilibili did not provide a compatible H.264 video stream within the upload limit",
-    );
-  }
-
-  return { video: selected.video, audio: selected.audio };
-}
-
-function estimateFormatSize(format: BilibiliFormat, duration: number): number {
-  return (
-    format.filesize ??
-    format.filesize_approx ??
-    (format.tbr !== undefined && duration > 0
-      ? (format.tbr * 1000 * duration) / 8
-      : Number.POSITIVE_INFINITY)
-  );
-}
-
-async function findDownloadedVideo(
-  tempDir: string,
-  expectedPath: string,
-): Promise<string> {
-  try {
-    await access(expectedPath);
-    return expectedPath;
-  } catch {
-    const entries = await readdir(tempDir, { withFileTypes: true });
-    const entry = entries.find(
-      (item) => item.isFile() && extname(item.name).toLowerCase() === ".mp4",
-    );
-
-    if (entry === undefined) {
-      throw new Error("yt-dlp did not produce a Bilibili MP4 file");
+      let bytes = 0;
+      const body = response.body as unknown as AsyncIterable<Uint8Array>;
+      const source = Readable.from(
+        (async function* () {
+          for await (const chunk of body) {
+            bytes += chunk.byteLength;
+            if (bytes > maxBytes) {
+              throw new Error("Bilibili media stream exceeds the upload limit");
+            }
+            yield chunk;
+          }
+        })(),
+      );
+      await pipeline(source, createWriteStream(destination, { mode: 0o600 }));
+      return bytes;
+    } catch (error) {
+      lastError = error;
+      await rm(destination, { force: true });
     }
-
-    return join(tempDir, entry.name);
   }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Bilibili did not provide a media URL", { cause: lastError });
+}
+
+async function readCookieHeader(
+  cookieFile: string | undefined,
+): Promise<string | undefined> {
+  if (cookieFile === undefined || cookieFile === "") {
+    return undefined;
+  }
+
+  try {
+    const now = Date.now() / 1000;
+    const cookies = (await readFile(cookieFile, "utf8"))
+      .split(/\r?\n/)
+      .map((line) =>
+        line.startsWith("#HttpOnly_") ? line.slice("#HttpOnly_".length) : line,
+      )
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => line.split("\t"))
+      .filter(
+        (fields) =>
+          fields.length >= 7 &&
+          (Number(fields[4]) === 0 || Number(fields[4]) > now),
+      )
+      .map((fields) => `${fields[5]}=${fields[6]}`);
+    return cookies.length > 0 ? cookies.join("; ") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function estimateStreamSize(
+  stream: BilibiliDashStream,
+  duration: number | undefined,
+): number {
+  return stream.bandwidth !== undefined &&
+    duration !== undefined &&
+    duration > 0
+    ? (stream.bandwidth * duration) / 8
+    : Number.POSITIVE_INFINITY;
+}
+
+function streamBaseUrl(stream: BilibiliDashStream): string | undefined {
+  return stream.baseUrl ?? stream.base_url;
+}
+
+function streamUrls(stream: BilibiliDashStream): string[] {
+  const primary = streamBaseUrl(stream);
+  return primary === undefined
+    ? []
+    : [primary, ...(stream.backupUrl ?? stream.backup_url ?? [])];
+}
+
+function streamMimeType(stream: BilibiliDashStream): string {
+  return stream.mimeType ?? stream.mime_type ?? "";
+}
+
+function streamCodecs(stream: BilibiliDashStream): string {
+  return stream.codecs ?? "";
 }
 
 async function runCommandWithExecFile(
@@ -432,7 +521,6 @@ async function runCommandWithExecFile(
           );
           return;
         }
-
         resolve({ stdout, stderr });
       },
     );
@@ -452,21 +540,16 @@ async function resolveBilibiliUrl(
     redirect: "manual",
   });
   const location = response.headers.get("location");
-
   await cancelResponseBody(response);
-
-  if (location === null) {
-    return null;
-  }
-
-  return parseRedirectUrl(new URL(location, source.url).toString());
+  return location === null
+    ? null
+    : parseRedirectUrl(new URL(location, source.url).toString());
 }
 
 function parseRedirectUrl(
   url: string,
 ): Extract<BilibiliUrl, { kind: "direct" }> | null {
   const parsed = new URL(url);
-
   if (
     parsed.hostname !== "bilibili.com" &&
     parsed.hostname !== "www.bilibili.com"
@@ -475,20 +558,13 @@ function parseRedirectUrl(
   }
 
   const match = parsed.pathname.match(/^\/video\/(BV[0-9A-Za-z]+|av\d+)\/?$/i);
-
-  if (match === null) {
-    return null;
-  }
-
-  const videoId = match[1];
-
+  const videoId = match?.[1];
   if (videoId === undefined) {
     return null;
   }
 
   const rawPage = Number(parsed.searchParams.get("p"));
   const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
-
   return videoId.toLowerCase().startsWith("av")
     ? {
         kind: "direct",
@@ -510,7 +586,6 @@ async function fetchJson<T>(
   headers: Record<string, string>,
 ): Promise<T> {
   const response = await fetchWithRetry(url, fetcher, { headers });
-
   if (!response.ok) {
     await cancelResponseBody(response);
     throw new Error(
@@ -519,13 +594,11 @@ async function fetchJson<T>(
   }
 
   const payload = (await response.json()) as BilibiliApiEnvelope<T>;
-
   if (payload.code !== 0 || payload.data === undefined) {
     throw new Error(
       `Bilibili API error: ${payload.code} ${payload.message || "unknown error"}`,
     );
   }
-
   return payload.data;
 }
 
@@ -543,7 +616,6 @@ async function fetchWithRetry(
     if (!isNetworkError(error)) {
       throw error;
     }
-
     return await fetcher(url, {
       ...init,
       signal: AbortSignal.timeout(BILIBILI_TIMEOUT_MS),
@@ -559,24 +631,21 @@ function buildDescription(
   const parts = [title];
   const trimmedTitle = title.trim();
   const trimmedPart = page.part.trim();
-
   if (trimmedPart !== "" && trimmedPart !== trimmedTitle) {
     parts.push(`分P ${page.page}: ${page.part}`);
   }
-
   const trimmedDesc = desc.trim();
-
   if (trimmedDesc !== "") {
     parts.push(trimmedDesc);
   }
-
   return parts.join("\n\n");
 }
 
-function defaultHeaders(): Record<string, string> {
+function defaultHeaders(cookie?: string): Record<string, string> {
   return {
     Referer: "https://www.bilibili.com/",
     "User-Agent": BILIBILI_USER_AGENT,
+    ...(cookie !== undefined ? { Cookie: cookie } : {}),
   };
 }
 

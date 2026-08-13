@@ -9,6 +9,7 @@ import {
   fetchBilibiliPreview,
   selectBilibiliFormats,
   type BilibiliDependencies,
+  type BilibiliPlayInfo,
 } from "../services/bilibili.js";
 
 function viewResponse(overrides: Record<string, unknown> = {}): Response {
@@ -22,7 +23,7 @@ function viewResponse(overrides: Record<string, unknown> = {}): Response {
       pic: "https://i0.hdslb.com/cover.jpg",
       owner: { name: "Uploader" },
       pages: [
-        { cid: 1, page: 1, part: "P1" },
+        { cid: 1, page: 1, part: "P1", duration: 60 },
         {
           cid: 2,
           page: 2,
@@ -36,67 +37,86 @@ function viewResponse(overrides: Record<string, unknown> = {}): Response {
   });
 }
 
-function metadata(): Record<string, unknown> {
+function playInfo(duration = 60): BilibiliPlayInfo {
   return {
-    duration: 59.6,
-    formats: [
-      {
-        format_id: "30280",
-        vcodec: "none",
-        acodec: "mp4a.40.2",
-        abr: 128,
-        filesize_approx: 900_000,
-      },
-      {
-        format_id: "30064",
-        vcodec: "avc1.640033",
-        acodec: "none",
-        width: 1280,
-        height: 720,
-        quality: 64,
-        tbr: 1_000,
-        filesize_approx: 8_000_000,
-      },
-      {
-        format_id: "30080",
-        vcodec: "avc1.640033",
-        acodec: "none",
-        width: 1920,
-        height: 1080,
-        quality: 80,
-        tbr: 2_000,
-        filesize_approx: 16_000_000,
-      },
-    ],
+    timelength: duration * 1000,
+    dash: {
+      duration,
+      audio: [
+        {
+          id: 30280,
+          baseUrl: "https://cdn.example/audio.m4s",
+          backupUrl: ["https://backup.example/audio.m4s"],
+          mimeType: "audio/mp4",
+          codecs: "mp4a.40.2",
+          bandwidth: 128_000,
+        },
+      ],
+      video: [
+        {
+          id: 64,
+          baseUrl: "https://cdn.example/720.m4s",
+          backupUrl: ["https://backup.example/720.m4s"],
+          mimeType: "video/mp4",
+          codecs: "avc1.640033",
+          width: 1280,
+          height: 720,
+          bandwidth: 1_000_000,
+        },
+        {
+          id: 80,
+          baseUrl: "https://cdn.example/1080.m4s",
+          mimeType: "video/mp4",
+          codecs: "avc1.640033",
+          width: 1920,
+          height: 1080,
+          bandwidth: 2_000_000,
+        },
+      ],
+    },
   };
+}
+
+function playResponse(info = playInfo()): Response {
+  return Response.json({ code: 0, message: "OK", data: info });
 }
 
 async function mediaDependencies(tempDir: string): Promise<{
   dependencies: BilibiliDependencies;
-  calls: Array<{ file: string; args: string[] }>;
+  downloads: Array<{
+    urls: readonly string[];
+    destination: string;
+    headers: Record<string, string>;
+    maxBytes: number;
+  }>;
+  commands: Array<{ file: string; args: string[] }>;
 }> {
-  const calls: Array<{ file: string; args: string[] }> = [];
+  const downloads: Array<{
+    urls: readonly string[];
+    destination: string;
+    headers: Record<string, string>;
+    maxBytes: number;
+  }> = [];
+  const commands: Array<{ file: string; args: string[] }> = [];
   const cookieFile = join(tempDir, "bilibili.cookies.txt");
-  await writeFile(cookieFile, "# Netscape HTTP Cookie File\n");
+  await writeFile(
+    cookieFile,
+    "# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\tsecret\n",
+  );
   return {
-    calls,
+    downloads,
+    commands,
     dependencies: {
       cookieFile,
-      ytDlpPath: "/usr/bin/yt-dlp",
       ffmpegPath: "/usr/bin/ffmpeg",
       createTempDir: () => Promise.resolve(tempDir),
+      downloadStream: async (urls, destination, headers, maxBytes) => {
+        downloads.push({ urls, destination, headers, maxBytes });
+        await writeFile(destination, "stream");
+        return 6;
+      },
       runCommand: async (file, args) => {
-        calls.push({ file, args });
-        if (args.includes("--dump-single-json")) {
-          return { stdout: JSON.stringify(metadata()), stderr: "" };
-        }
-
-        if (file.endsWith("yt-dlp")) {
-          const output = args[args.indexOf("--output") + 1]!;
-          await writeFile(output, "merged");
-          return { stdout: "", stderr: "" };
-        }
-
+        commands.push({ file, args });
         await writeFile(args.at(-1)!, "faststart");
         return { stdout: "", stderr: "" };
       },
@@ -104,54 +124,67 @@ async function mediaDependencies(tempDir: string): Promise<{
   };
 }
 
-test("fetches and prepares a Bilibili video for streaming upload", async () => {
+const directSource: BilibiliUrl = {
+  kind: "direct",
+  url: "https://www.bilibili.com/video/BV1xx411c7mD/",
+  page: 2,
+  bvid: "BV1xx411c7mD",
+};
+
+test("fetches native DASH streams and prepares a Bilibili video", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
-  const source: BilibiliUrl = {
-    kind: "direct",
-    url: "https://www.bilibili.com/video/BV1xx411c7mD/",
-    page: 2,
-    bvid: "BV1xx411c7mD",
-  };
-  const apiCalls: string[] = [];
-  const { dependencies, calls } = await mediaDependencies(tempDir);
+  const apiCalls: Array<{ url: string; headers?: HeadersInit }> = [];
+  const { dependencies, downloads, commands } =
+    await mediaDependencies(tempDir);
 
   try {
     const result = await fetchBilibiliPreview(
-      source,
-      (input) => {
-        apiCalls.push(String(input));
-        return Promise.resolve(viewResponse());
+      directSource,
+      (input, init) => {
+        const url = String(input);
+        apiCalls.push({
+          url,
+          ...(init?.headers !== undefined ? { headers: init.headers } : {}),
+        });
+        return Promise.resolve(
+          url.includes("/x/player/playurl") ? playResponse() : viewResponse(),
+        );
       },
       dependencies,
     );
 
-    assert.deepEqual(apiCalls, [
-      "https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD",
-    ]);
-    assert.equal(calls.length, 3);
-    assert.deepEqual(calls[0]?.args.slice(0, 3), [
-      "--dump-single-json",
-      "--no-download",
-      "--no-playlist",
-    ]);
-    const cookieIndex = calls[0]?.args.indexOf("--cookies") ?? -1;
-    const writableCookieFile = join(tempDir, ".yt-dlp-cookies.txt");
-    assert.equal(calls[0]?.args[cookieIndex + 1], writableCookieFile);
+    assert.equal(apiCalls.length, 2);
     assert.equal(
-      calls[1]?.args[calls[1].args.indexOf("--cookies") + 1],
-      writableCookieFile,
+      apiCalls[0]?.url,
+      "https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD",
     );
-    await access(writableCookieFile);
-    assert.ok(calls[1]?.args.includes("30064+30280"));
-    const ffmpegLocationIndex =
-      calls[1]?.args.indexOf("--ffmpeg-location") ?? -1;
-    assert.deepEqual(
-      calls[1]?.args.slice(ffmpegLocationIndex, ffmpegLocationIndex + 2),
-      ["--ffmpeg-location", "/usr/bin/ffmpeg"],
+    const playUrl = new URL(apiCalls[1]!.url);
+    assert.equal(playUrl.pathname, "/x/player/playurl");
+    assert.equal(playUrl.searchParams.get("bvid"), "BV1xx411c7mD");
+    assert.equal(playUrl.searchParams.get("cid"), "2");
+    assert.equal(playUrl.searchParams.get("qn"), "64");
+    assert.equal(playUrl.searchParams.get("fnval"), "16");
+    assert.equal(
+      (apiCalls[0]?.headers as Record<string, string>).Cookie,
+      "SESSDATA=secret",
     );
-    assert.ok(calls[2]?.args.includes("-movflags"));
-    assert.ok(calls[2]?.args.includes("+faststart"));
-    assert.equal(calls[2]?.args.at(-1), join(tempDir, "BV1xx411c7mD-p2.mp4"));
+    assert.deepEqual(downloads[0]?.urls, [
+      "https://cdn.example/audio.m4s",
+      "https://backup.example/audio.m4s",
+    ]);
+    assert.deepEqual(downloads[1]?.urls, [
+      "https://cdn.example/720.m4s",
+      "https://backup.example/720.m4s",
+    ]);
+    assert.equal(
+      downloads[0]?.headers.Referer,
+      "https://www.bilibili.com/video/BV1xx411c7mD/?p=2",
+    );
+    assert.equal(downloads[0]?.headers.Origin, "https://www.bilibili.com");
+    assert.equal(downloads[0]?.headers.Cookie, undefined);
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0]?.file, "/usr/bin/ffmpeg");
+    assert.ok(commands[0]?.args.includes("+faststart"));
     assert.deepEqual(result, {
       id: "BV1xx411c7mD-p2",
       url: "https://www.bilibili.com/video/BV1xx411c7mD/?p=2",
@@ -179,39 +212,73 @@ test("fetches and prepares a Bilibili video for streaming upload", async () => {
   }
 });
 
-test("omits duplicate page title when part matches the video title", async () => {
+test("streams media from a backup URL when the primary URL fails", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
+  const calls: string[] = [];
   const { dependencies } = await mediaDependencies(tempDir);
+  delete dependencies.downloadStream;
+  dependencies.runCommand = async (_file, args) => {
+    await writeFile(args.at(-1)!, "faststart");
+    return { stdout: "", stderr: "" };
+  };
 
   try {
     const result = await fetchBilibiliPreview(
-      {
-        kind: "direct",
-        url: "https://www.bilibili.com/video/BV1xx411c7mD/",
-        page: 1,
-        bvid: "BV1xx411c7mD",
+      directSource,
+      (input) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/x/web-interface/view")) {
+          return Promise.resolve(viewResponse());
+        }
+        if (url.includes("/x/player/playurl")) {
+          return Promise.resolve(playResponse());
+        }
+        if (url.startsWith("https://cdn.example/")) {
+          return Promise.resolve(new Response(null, { status: 503 }));
+        }
+        return Promise.resolve(new Response("stream"));
       },
-      () =>
-        Promise.resolve(
-          viewResponse({
-            title: "Same Title",
-            pages: [{ cid: 1, page: 1, part: "Same Title" }],
-          }),
-        ),
       dependencies,
     );
 
+    assert.equal(result?.media[0]?.kind, "video");
+    assert.ok(calls.includes("https://backup.example/audio.m4s"));
+    assert.ok(calls.includes("https://backup.example/720.m4s"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("omits duplicate page title when part matches the video title", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
+  const { dependencies } = await mediaDependencies(tempDir);
+  try {
+    const result = await fetchBilibiliPreview(
+      { ...directSource, page: 1 },
+      (input) =>
+        Promise.resolve(
+          String(input).includes("playurl")
+            ? playResponse()
+            : viewResponse({
+                title: "Same Title",
+                pages: [{ cid: 1, page: 1, part: "Same Title", duration: 60 }],
+              }),
+        ),
+      dependencies,
+    );
     assert.equal(result?.text, "Same Title\n\nDesc");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("resolves b23 short url and ignores unsupported redirects", async () => {
+test("resolves b23 short URLs and ignores unsupported redirects", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
   const { dependencies } = await mediaDependencies(tempDir);
   const fetcher = (input: string | URL): Promise<Response> => {
-    if (String(input) === "https://b23.tv/good") {
+    const url = String(input);
+    if (url === "https://b23.tv/good") {
       return Promise.resolve(
         new Response(null, {
           status: 302,
@@ -221,7 +288,7 @@ test("resolves b23 short url and ignores unsupported redirects", async () => {
         }),
       );
     }
-    if (String(input) === "https://b23.tv/bad") {
+    if (url === "https://b23.tv/bad") {
       return Promise.resolve(
         new Response(null, {
           status: 302,
@@ -229,9 +296,10 @@ test("resolves b23 short url and ignores unsupported redirects", async () => {
         }),
       );
     }
-    return Promise.resolve(viewResponse());
+    return Promise.resolve(
+      url.includes("playurl") ? playResponse() : viewResponse(),
+    );
   };
-
   try {
     const good = await fetchBilibiliPreview(
       { kind: "short", url: "https://b23.tv/good" },
@@ -243,208 +311,146 @@ test("resolves b23 short url and ignores unsupported redirects", async () => {
       fetcher,
       dependencies,
     );
-
-    assert.ok(good);
-    assert.equal(good.url, "https://www.bilibili.com/video/BV1xx411c7mD/?p=1");
+    assert.equal(good?.url, "https://www.bilibili.com/video/BV1xx411c7mD/?p=1");
     assert.equal(bad, null);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("selects the highest H.264 format that fits the Telegram budget", () => {
-  const source = metadata();
-  const official = selectBilibiliFormats(source, 10_000_000);
-  const local = selectBilibiliFormats(source, 100_000_000);
+test("selects the highest H.264 and AAC streams within policy", () => {
+  const selected = selectBilibiliFormats(playInfo(), 60, 10_000_000);
+  assert.equal(selected.video.id, 64);
+  assert.equal(selected.audio.id, 30280);
+});
 
-  assert.equal(official.video.format_id, "30064");
-  assert.equal(local.video.format_id, "30064");
-  assert.equal(local.audio.format_id, "30280");
+test("supports snake_case DASH response fields", () => {
+  const selected = selectBilibiliFormats(
+    {
+      dash: {
+        audio: [
+          {
+            base_url: "https://cdn.example/audio",
+            mime_type: "audio/mp4",
+            codecs: "mp4a.40.2",
+            bandwidth: 64_000,
+          },
+        ],
+        video: [
+          {
+            base_url: "https://cdn.example/video",
+            mime_type: "video/mp4",
+            codecs: "avc1.4d401f",
+            height: 480,
+            bandwidth: 500_000,
+          },
+        ],
+      },
+    },
+    60,
+    10_000_000,
+  );
+  assert.equal(selected.video.height, 480);
 });
 
 test("limits videos at least 20 minutes long to 480p", () => {
-  const selected = selectBilibiliFormats(
-    {
-      duration: 20 * 60,
-      formats: [
-        {
-          format_id: "audio",
-          vcodec: "none",
-          acodec: "mp4a.40.2",
-          filesize_approx: 1_000_000,
-        },
-        {
-          format_id: "720p",
-          vcodec: "avc1.64001f",
-          acodec: "none",
-          height: 720,
-          filesize_approx: 10_000_000,
-        },
-        {
-          format_id: "480p",
-          vcodec: "avc1.4d401f",
-          acodec: "none",
-          height: 480,
-          filesize_approx: 5_000_000,
-        },
-      ],
-    },
-    100_000_000,
-  );
-
-  assert.equal(selected.video.format_id, "480p");
-});
-
-test("limits metadata with unknown duration to 720p", () => {
-  const source = metadata();
-  delete source.duration;
-
-  const selected = selectBilibiliFormats(source, 100_000_000);
-
-  assert.equal(selected.video.format_id, "30064");
-});
-
-test("ignores formats with unknown height", () => {
-  const source = metadata();
-  (source.formats as Record<string, unknown>[]).push({
-    format_id: "unknown-height",
-    vcodec: "avc1.640033",
-    acodec: "none",
-    quality: 100,
-    filesize_approx: 1_000_000,
+  const source = playInfo(20 * 60);
+  source.dash!.video!.push({
+    id: 32,
+    baseUrl: "https://cdn.example/480.m4s",
+    mimeType: "video/mp4",
+    codecs: "avc1.4d401f",
+    width: 854,
+    height: 480,
+    bandwidth: 500_000,
   });
-
-  const selected = selectBilibiliFormats(source, 100_000_000);
-
-  assert.equal(selected.video.format_id, "30064");
+  const selected = selectBilibiliFormats(source, 20 * 60, 100_000_000);
+  assert.equal(selected.video.id, 32);
 });
 
-test("uses the Bilibili page duration when yt-dlp omits it", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
-  const sourceMetadata = metadata();
-  delete sourceMetadata.duration;
-  sourceMetadata.formats = [
-    ...(sourceMetadata.formats as Record<string, unknown>[]),
+test("ignores HEVC and formats with unknown height", () => {
+  const source = playInfo();
+  source.dash!.video!.push(
     {
-      format_id: "30032",
-      vcodec: "avc1.4d401f",
-      acodec: "none",
-      width: 854,
-      height: 480,
-      filesize_approx: 5_000_000,
+      id: 65,
+      baseUrl: "https://cdn.example/hevc.m4s",
+      mimeType: "video/mp4",
+      codecs: "hev1.1.6.L120.90",
+      height: 720,
+      bandwidth: 2_000_000,
+    },
+    {
+      id: 66,
+      baseUrl: "https://cdn.example/unknown.m4s",
+      mimeType: "video/mp4",
+      codecs: "avc1.640033",
+      bandwidth: 2_000_000,
+    },
+  );
+  assert.equal(selectBilibiliFormats(source, 60, 100_000_000).video.id, 64);
+});
+
+test("uses lower bitrate AAC when it preserves higher video quality", () => {
+  const source = playInfo();
+  source.dash!.audio = [
+    {
+      id: 1,
+      baseUrl: "https://cdn.example/high-audio",
+      mimeType: "audio/mp4",
+      codecs: "mp4a.40.2",
+      bandwidth: 200_000,
+    },
+    {
+      id: 2,
+      baseUrl: "https://cdn.example/low-audio",
+      mimeType: "audio/mp4",
+      codecs: "mp4a.40.2",
+      bandwidth: 50_000,
     },
   ];
-  const { dependencies, calls } = await mediaDependencies(tempDir);
-  dependencies.runCommand = async (file, args) => {
-    calls.push({ file, args });
-    if (args.includes("--dump-single-json")) {
-      return { stdout: JSON.stringify(sourceMetadata), stderr: "" };
-    }
-    if (file.endsWith("yt-dlp")) {
-      await writeFile(args[args.indexOf("--output") + 1]!, "merged");
-    } else {
-      await writeFile(args.at(-1)!, "faststart");
-    }
-    return { stdout: "", stderr: "" };
-  };
-
-  try {
-    const result = await fetchBilibiliPreview(
-      {
-        kind: "direct",
-        url: "https://www.bilibili.com/video/BV1xx411c7mD/",
-        page: 2,
-        bvid: "BV1xx411c7mD",
-      },
-      () =>
-        Promise.resolve(
-          viewResponse({
-            pages: [
-              { cid: 1, page: 1, part: "P1" },
-              { cid: 2, page: 2, part: "P2", duration: 20 * 60 },
-            ],
-          }),
-        ),
-      dependencies,
-    );
-
-    assert.ok(calls[1]?.args.includes("30032+30280"));
-    const media = result?.media[0];
-    assert.equal(media?.kind, "video");
-    if (media?.kind === "video") {
-      assert.equal(media.height, 480);
-      assert.equal(media.duration, 20 * 60);
-    }
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  source.dash!.video = [
+    {
+      id: 64,
+      baseUrl: "https://cdn.example/720",
+      mimeType: "video/mp4",
+      codecs: "avc1.640033",
+      height: 720,
+      bandwidth: 1_000_000,
+    },
+    {
+      id: 32,
+      baseUrl: "https://cdn.example/480",
+      mimeType: "video/mp4",
+      codecs: "avc1.4d401f",
+      height: 480,
+      bandwidth: 500_000,
+    },
+  ];
+  const selected = selectBilibiliFormats(source, 60, 8_000_000);
+  assert.equal(selected.video.id, 64);
+  assert.equal(selected.audio.id, 2);
 });
 
-test("rejects formats that cannot fit the Telegram upload budget", () => {
+test("rejects streams that cannot fit the upload budget", () => {
   assert.throws(
-    () => selectBilibiliFormats(metadata(), 1_000_000),
+    () => selectBilibiliFormats(playInfo(), 60, 1_000_000),
     /within the upload limit/,
   );
 });
 
-test("uses lower bitrate AAC when it preserves a higher video quality", () => {
-  const selected = selectBilibiliFormats(
-    {
-      duration: 60,
-      formats: [
-        {
-          format_id: "audio-high",
-          vcodec: "none",
-          acodec: "mp4a.40.2",
-          abr: 192,
-          filesize_approx: 2_000_000,
-        },
-        {
-          format_id: "audio-low",
-          vcodec: "none",
-          acodec: "mp4a.40.2",
-          abr: 64,
-          filesize_approx: 500_000,
-        },
-        {
-          format_id: "video-high",
-          vcodec: "avc1.640033",
-          acodec: "none",
-          height: 720,
-          filesize_approx: 9_000_000,
-        },
-        {
-          format_id: "video-low",
-          vcodec: "avc1.640033",
-          acodec: "none",
-          height: 480,
-          filesize_approx: 5_000_000,
-        },
-      ],
-    },
-    10_000_000,
-  );
-
-  assert.equal(selected.video.format_id, "video-high");
-  assert.equal(selected.audio.format_id, "audio-low");
-});
-
-test("returns an HTML-capable text preview when media preparation fails", async () => {
+test("returns text preview and removes partial media after download failure", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
+  const { dependencies } = await mediaDependencies(tempDir);
+  dependencies.downloadStream = () =>
+    Promise.reject(new Error("media unavailable"));
   const result = await fetchBilibiliPreview(
-    {
-      kind: "direct",
-      url: "https://www.bilibili.com/video/BV1xx411c7mD/",
-      page: 1,
-      bvid: "BV1xx411c7mD",
-    },
-    () => Promise.resolve(viewResponse()),
-    {
-      createTempDir: () => Promise.resolve(tempDir),
-      runCommand: () => Promise.reject(new Error("media unavailable")),
-    },
+    { ...directSource, page: 1 },
+    (input) =>
+      Promise.resolve(
+        String(input).includes("playurl") ? playResponse() : viewResponse(),
+      ),
+    dependencies,
   );
-
   assert.deepEqual(result, {
     id: "BV1xx411c7mD-p1",
     url: "https://www.bilibili.com/video/BV1xx411c7mD/?p=1",
@@ -461,7 +467,6 @@ test("cleans only stale Bilibili temp directories", async () => {
   const unrelated = join(root, "unrelated");
   await mkdir(stale);
   await mkdir(unrelated);
-
   try {
     await cleanupStaleBilibiliTempDirs(root);
     await assert.rejects(access(stale));

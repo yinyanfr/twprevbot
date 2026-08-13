@@ -3,7 +3,6 @@ import "dotenv/config";
 export type AppConfig = {
   botToken: string;
   botName: string;
-  ytDlpPath?: string;
   ffmpegPath?: string;
   bilibiliCookieFile?: string;
   telegramApiRoot?: string;
@@ -13,7 +12,6 @@ export type AppConfig = {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const botToken = env.TGBOTKEY;
   const botName = env.TGBOTNAME;
-  const ytDlpPath = env.YTDLP_PATH?.trim();
   const ffmpegPath = env.FFMPEG_PATH?.trim();
   const bilibiliCookieFile =
     env.BILIBILI_COOKIE_FILE?.trim() || ".secrets/bilibili.cookies.txt";
@@ -32,7 +30,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     botToken,
     botName,
-    ...(ytDlpPath !== undefined && ytDlpPath !== "" ? { ytDlpPath } : {}),
     ...(ffmpegPath !== undefined && ffmpegPath !== "" ? { ffmpegPath } : {}),
     bilibiliCookieFile,
     ...(telegramApiRoot !== undefined && telegramApiRoot !== ""

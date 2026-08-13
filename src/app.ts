@@ -193,9 +193,6 @@ async function processBilibiliRequest(
       ...(config.bilibiliCookieFile !== undefined
         ? { cookieFile: config.bilibiliCookieFile }
         : {}),
-      ...(config.ytDlpPath !== undefined
-        ? { ytDlpPath: config.ytDlpPath }
-        : {}),
       ...(config.ffmpegPath !== undefined
         ? { ffmpegPath: config.ffmpegPath }
         : {}),
