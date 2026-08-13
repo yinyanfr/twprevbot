@@ -88,9 +88,11 @@ const LOCAL_TELEGRAM_MEDIA_LIMIT = 1900 * 1024 * 1024;
 const DEFAULT_YT_DLP_PATH = "yt-dlp";
 const DEFAULT_FFMPEG_PATH = "ffmpeg";
 const BILIBILI_TEMP_DIR_PREFIX = "twprevbot-bilibili-";
+const LONG_VIDEO_DURATION_SECONDS = 20 * 60;
+const DEFAULT_MAX_VIDEO_HEIGHT = 720;
+const LONG_VIDEO_MAX_HEIGHT = 480;
 const BILIBILI_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-let bilibiliMediaBusy = false;
 
 export async function fetchBilibiliPreview(
   source: BilibiliUrl,
@@ -185,35 +187,6 @@ async function prepareBilibiliMedia(
   height?: number;
   duration?: number;
 }> {
-  if (bilibiliMediaBusy) {
-    throw new Error("Bilibili media preparation is already in progress");
-  }
-
-  bilibiliMediaBusy = true;
-  try {
-    return await prepareBilibiliMediaWithSlot(
-      canonicalUrl,
-      bvid,
-      page,
-      dependencies,
-    );
-  } finally {
-    bilibiliMediaBusy = false;
-  }
-}
-
-async function prepareBilibiliMediaWithSlot(
-  canonicalUrl: string,
-  bvid: string,
-  page: BilibiliViewPage,
-  dependencies: BilibiliDependencies,
-): Promise<{
-  localFilePath: string;
-  tempDir: string;
-  width?: number;
-  height?: number;
-  duration?: number;
-}> {
   const runCommand = dependencies.runCommand ?? runCommandWithExecFile;
   const createTempDir =
     dependencies.createTempDir ??
@@ -234,7 +207,13 @@ async function prepareBilibiliMediaWithSlot(
       "--",
       canonicalUrl,
     ]);
-    const metadata = parseYtDlpMetadata(metadataResult.stdout);
+    const rawMetadata = parseYtDlpMetadata(metadataResult.stdout);
+    const metadata = {
+      ...rawMetadata,
+      ...(rawMetadata.duration === undefined && page.duration !== undefined
+        ? { duration: page.duration }
+        : {}),
+    };
     const selected = selectBilibiliFormats(
       metadata,
       dependencies.telegramLocalMode === true
@@ -363,13 +342,18 @@ export function selectBilibiliFormats(
   }
 
   const duration = metadata.duration ?? 0;
+  const maxVideoHeight =
+    duration >= LONG_VIDEO_DURATION_SECONDS
+      ? LONG_VIDEO_MAX_HEIGHT
+      : DEFAULT_MAX_VIDEO_HEIGHT;
   const videos = formats
     .filter(
       (format): format is BilibiliFormat & { format_id: string } =>
         format.format_id !== undefined &&
         format.vcodec?.startsWith("avc1") === true &&
         format.acodec === "none" &&
-        (format.height ?? 0) <= 1080,
+        format.height !== undefined &&
+        format.height <= maxVideoHeight,
     )
     .sort(
       (a, b) =>

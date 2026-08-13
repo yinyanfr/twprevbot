@@ -27,6 +27,13 @@ export type { AppendableMessage } from "./thread-append.js";
 export { extractBilibiliUrls, parseBilibiliVideoUrl } from "./bilibili-url.js";
 export type { BilibiliUrl } from "./bilibili-url.js";
 
+export { ActiveBilibiliRequests } from "./active-bilibili-requests.js";
+export type { ActiveBilibiliRequestResult } from "./active-bilibili-requests.js";
+
+export { startRepeatingChatAction } from "./repeating-chat-action.js";
+
+export { SerialTaskQueue } from "./serial-task-queue.js";
+
 export { extractYouTubeUrls, parseYouTubeVideoUrl } from "./youtube-url.js";
 export type { YouTubeUrl } from "./youtube-url.js";
 

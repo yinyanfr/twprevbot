@@ -11,13 +11,20 @@ import {
   buildInlineResult,
   buildAppendedMessage,
   buildTelegramPreview,
+  ActiveBilibiliRequests,
   extractBilibiliUrls,
   extractTweetUrls,
   getUploadedMediaFallbackTypes,
   logger,
   normalizeThreadResponse,
+  SerialTaskQueue,
+  startRepeatingChatAction,
 } from "./libs/index.js";
-import type { PreviewPost, TelegramMediaGroupItem } from "./libs/index.js";
+import type {
+  BilibiliUrl,
+  PreviewPost,
+  TelegramMediaGroupItem,
+} from "./libs/index.js";
 
 type SentMessage = {
   replyMessageId: number;
@@ -48,6 +55,13 @@ const TELEGRAM_RETRY_OPTIONS = {
 };
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000;
 const MEMORY_LOG_INTERVAL_MS = 60 * 60 * 1000;
+const activeBilibiliRequests = new ActiveBilibiliRequests(2);
+const bilibiliTaskQueue = new SerialTaskQueue();
+
+type AcceptedBilibiliUrl = {
+  url: BilibiliUrl;
+  release: () => void;
+};
 
 bot.api.config.use(autoRetry(TELEGRAM_RETRY_OPTIONS));
 
@@ -56,7 +70,25 @@ startMemoryMetricsLogging();
 bot.on("message:text", (ctx) => {
   const text = ctx.message.text;
   const tweetUrls = extractTweetUrls(text);
-  const bilibiliUrls = extractBilibiliUrls(text);
+  const bilibiliUrls: AcceptedBilibiliUrl[] = [];
+
+  for (const url of extractBilibiliUrls(text)) {
+    const result = activeBilibiliRequests.acquire(ctx.chat.id, url);
+
+    if (result.kind === "accepted") {
+      bilibiliUrls.push({ url, release: result.release });
+      continue;
+    }
+
+    if (result.kind === "duplicate") {
+      if (result.shouldNotify) {
+        void replyToSourceMessage(ctx, "该链接正在处理中，请稍候。", url.url);
+      }
+      continue;
+    }
+
+    void replyToSourceMessage(ctx, "当前任务较多，请稍后再试。", url.url);
+  }
 
   if (tweetUrls.length === 0 && bilibiliUrls.length === 0) {
     return;
@@ -73,90 +105,139 @@ bot.on("message:text", (ctx) => {
 async function processMessageText(
   ctx: Context & { message: { message_id: number } },
   tweetUrls: ReturnType<typeof extractTweetUrls>,
-  bilibiliUrls: ReturnType<typeof extractBilibiliUrls>,
+  bilibiliUrls: AcceptedBilibiliUrl[],
 ): Promise<void> {
-  await ctx.replyWithChatAction("typing");
+  const stopChatAction = startRepeatingChatAction(
+    () => ctx.replyWithChatAction("typing"),
+    {
+      onError: (error) => {
+        logger.warn(
+          { err: error, chatId: ctx.chat?.id },
+          "Failed to send repeating chat action",
+        );
+      },
+    },
+  );
+  const bilibiliTasks = bilibiliUrls.map((bilibiliRequest) =>
+    bilibiliTaskQueue
+      .run(() => processBilibiliRequest(ctx, bilibiliRequest.url))
+      .finally(bilibiliRequest.release),
+  );
 
-  for (const tweetUrl of tweetUrls) {
-    try {
-      const response = await fetchTwitterThread(tweetUrl.id);
-      const posts = normalizeThreadResponse(response);
+  try {
+    for (const tweetUrl of tweetUrls) {
+      try {
+        const response = await fetchTwitterThread(tweetUrl.id);
+        const posts = normalizeThreadResponse(response);
 
-      let replyToMessageId = ctx.message.message_id;
-      let previousMessage: SentMessage | undefined;
+        let replyToMessageId = ctx.message.message_id;
+        let previousMessage: SentMessage | undefined;
 
-      for (const post of posts) {
-        if (
-          post.media.length === 0 &&
-          previousMessage?.appendTarget !== undefined
-        ) {
-          const appendedMessage = await appendTextToPreviousMessage(
-            ctx,
-            previousMessage.appendTarget,
-            post,
-          );
+        for (const post of posts) {
+          if (
+            post.media.length === 0 &&
+            previousMessage?.appendTarget !== undefined
+          ) {
+            const appendedMessage = await appendTextToPreviousMessage(
+              ctx,
+              previousMessage.appendTarget,
+              post,
+            );
 
-          if (appendedMessage !== undefined) {
-            previousMessage = {
-              ...previousMessage,
-              appendTarget: appendedMessage,
-            };
-            continue;
+            if (appendedMessage !== undefined) {
+              previousMessage = {
+                ...previousMessage,
+                appendTarget: appendedMessage,
+              };
+              continue;
+            }
+          }
+
+          try {
+            const sentMessage = await sendPreview(ctx, post, replyToMessageId);
+            replyToMessageId = sentMessage.replyMessageId;
+            previousMessage = sentMessage;
+          } finally {
+            await cleanupPreviewFiles(post);
           }
         }
-
-        try {
-          const sentMessage = await sendPreview(ctx, post, replyToMessageId);
-          replyToMessageId = sentMessage.replyMessageId;
-          previousMessage = sentMessage;
-        } finally {
-          await cleanupPreviewFiles(post);
-        }
+      } catch (error) {
+        logger.error(
+          { err: error, tweetId: tweetUrl.id },
+          "Failed to process tweet",
+        );
+        await replyToSourceMessage(
+          ctx,
+          `读取失败：${tweetUrl.url}`,
+          tweetUrl.url,
+        );
       }
-    } catch (error) {
-      logger.error(
-        { err: error, tweetId: tweetUrl.id },
-        "Failed to process tweet",
-      );
-      await ctx.reply(`读取失败：${tweetUrl.url}`, {
-        reply_parameters: { message_id: ctx.message.message_id },
-      });
+    }
+
+    await Promise.all(bilibiliTasks);
+  } finally {
+    await Promise.allSettled(bilibiliTasks);
+    stopChatAction();
+    for (const bilibiliRequest of bilibiliUrls) {
+      bilibiliRequest.release();
     }
   }
+}
 
-  for (const bilibiliUrl of bilibiliUrls) {
-    try {
-      const post = await fetchBilibiliPreview(bilibiliUrl, fetch, {
-        ...(config.bilibiliCookieFile !== undefined
-          ? { cookieFile: config.bilibiliCookieFile }
-          : {}),
-        ...(config.ytDlpPath !== undefined
-          ? { ytDlpPath: config.ytDlpPath }
-          : {}),
-        ...(config.ffmpegPath !== undefined
-          ? { ffmpegPath: config.ffmpegPath }
-          : {}),
-        telegramLocalMode: config.telegramLocalMode,
-      });
+async function processBilibiliRequest(
+  ctx: Context & { message: { message_id: number } },
+  bilibiliUrl: BilibiliUrl,
+): Promise<void> {
+  try {
+    const post = await fetchBilibiliPreview(bilibiliUrl, fetch, {
+      ...(config.bilibiliCookieFile !== undefined
+        ? { cookieFile: config.bilibiliCookieFile }
+        : {}),
+      ...(config.ytDlpPath !== undefined
+        ? { ytDlpPath: config.ytDlpPath }
+        : {}),
+      ...(config.ffmpegPath !== undefined
+        ? { ffmpegPath: config.ffmpegPath }
+        : {}),
+      telegramLocalMode: config.telegramLocalMode,
+    });
 
-      if (post === null) {
-        continue;
-      }
-
-      try {
-        await sendPreview(ctx, post, ctx.message.message_id);
-      } finally {
-        await cleanupPreviewFiles(post);
-      }
-    } catch (error) {
-      logger.error(
-        { err: error, bilibiliUrl: bilibiliUrl.url },
-        "Failed to process bilibili video",
-      );
-      await ctx.reply(`读取失败：${bilibiliUrl.url}`, {
-        reply_parameters: { message_id: ctx.message.message_id },
-      });
+    if (post === null) {
+      return;
     }
+
+    try {
+      await sendPreview(ctx, post, ctx.message.message_id);
+    } finally {
+      await cleanupPreviewFiles(post);
+    }
+  } catch (error) {
+    logger.error(
+      { err: error, bilibiliUrl: bilibiliUrl.url },
+      "Failed to process bilibili video",
+    );
+    await replyToSourceMessage(
+      ctx,
+      `读取失败：${bilibiliUrl.url}`,
+      bilibiliUrl.url,
+    );
+  }
+}
+
+async function replyToSourceMessage(
+  ctx: Context & { message: { message_id: number } },
+  message: string,
+  bilibiliUrl: string,
+): Promise<void> {
+  try {
+    await ctx.reply(message, {
+      reply_parameters: { message_id: ctx.message.message_id },
+    });
+  } catch (error) {
+    logger.warn(
+      { err: error, bilibiliUrl },
+      "Failed to send Bilibili request status",
+    );
   }
 }
 

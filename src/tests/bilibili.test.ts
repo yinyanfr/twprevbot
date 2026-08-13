@@ -142,7 +142,7 @@ test("fetches and prepares a Bilibili video for streaming upload", async () => {
       writableCookieFile,
     );
     await access(writableCookieFile);
-    assert.ok(calls[1]?.args.includes("30080+30280"));
+    assert.ok(calls[1]?.args.includes("30064+30280"));
     const ffmpegLocationIndex =
       calls[1]?.args.indexOf("--ffmpeg-location") ?? -1;
     assert.deepEqual(
@@ -162,8 +162,8 @@ test("fetches and prepares a Bilibili video for streaming upload", async () => {
           kind: "video",
           url: "https://www.bilibili.com/video/BV1xx411c7mD/?p=2",
           thumbnailUrl: "https://i0.hdslb.com/cover.jpg",
-          width: 1920,
-          height: 1080,
+          width: 1280,
+          height: 720,
           duration: 60,
           supportsStreaming: true,
           localFilePath: join(tempDir, "BV1xx411c7mD-p2.mp4"),
@@ -258,8 +258,126 @@ test("selects the highest H.264 format that fits the Telegram budget", () => {
   const local = selectBilibiliFormats(source, 100_000_000);
 
   assert.equal(official.video.format_id, "30064");
-  assert.equal(local.video.format_id, "30080");
+  assert.equal(local.video.format_id, "30064");
   assert.equal(local.audio.format_id, "30280");
+});
+
+test("limits videos at least 20 minutes long to 480p", () => {
+  const selected = selectBilibiliFormats(
+    {
+      duration: 20 * 60,
+      formats: [
+        {
+          format_id: "audio",
+          vcodec: "none",
+          acodec: "mp4a.40.2",
+          filesize_approx: 1_000_000,
+        },
+        {
+          format_id: "720p",
+          vcodec: "avc1.64001f",
+          acodec: "none",
+          height: 720,
+          filesize_approx: 10_000_000,
+        },
+        {
+          format_id: "480p",
+          vcodec: "avc1.4d401f",
+          acodec: "none",
+          height: 480,
+          filesize_approx: 5_000_000,
+        },
+      ],
+    },
+    100_000_000,
+  );
+
+  assert.equal(selected.video.format_id, "480p");
+});
+
+test("limits metadata with unknown duration to 720p", () => {
+  const source = metadata();
+  delete source.duration;
+
+  const selected = selectBilibiliFormats(source, 100_000_000);
+
+  assert.equal(selected.video.format_id, "30064");
+});
+
+test("ignores formats with unknown height", () => {
+  const source = metadata();
+  (source.formats as Record<string, unknown>[]).push({
+    format_id: "unknown-height",
+    vcodec: "avc1.640033",
+    acodec: "none",
+    quality: 100,
+    filesize_approx: 1_000_000,
+  });
+
+  const selected = selectBilibiliFormats(source, 100_000_000);
+
+  assert.equal(selected.video.format_id, "30064");
+});
+
+test("uses the Bilibili page duration when yt-dlp omits it", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "twprevbot-bilibili-test-"));
+  const sourceMetadata = metadata();
+  delete sourceMetadata.duration;
+  sourceMetadata.formats = [
+    ...(sourceMetadata.formats as Record<string, unknown>[]),
+    {
+      format_id: "30032",
+      vcodec: "avc1.4d401f",
+      acodec: "none",
+      width: 854,
+      height: 480,
+      filesize_approx: 5_000_000,
+    },
+  ];
+  const { dependencies, calls } = await mediaDependencies(tempDir);
+  dependencies.runCommand = async (file, args) => {
+    calls.push({ file, args });
+    if (args.includes("--dump-single-json")) {
+      return { stdout: JSON.stringify(sourceMetadata), stderr: "" };
+    }
+    if (file.endsWith("yt-dlp")) {
+      await writeFile(args[args.indexOf("--output") + 1]!, "merged");
+    } else {
+      await writeFile(args.at(-1)!, "faststart");
+    }
+    return { stdout: "", stderr: "" };
+  };
+
+  try {
+    const result = await fetchBilibiliPreview(
+      {
+        kind: "direct",
+        url: "https://www.bilibili.com/video/BV1xx411c7mD/",
+        page: 2,
+        bvid: "BV1xx411c7mD",
+      },
+      () =>
+        Promise.resolve(
+          viewResponse({
+            pages: [
+              { cid: 1, page: 1, part: "P1" },
+              { cid: 2, page: 2, part: "P2", duration: 20 * 60 },
+            ],
+          }),
+        ),
+      dependencies,
+    );
+
+    assert.ok(calls[1]?.args.includes("30032+30280"));
+    const media = result?.media[0];
+    assert.equal(media?.kind, "video");
+    if (media?.kind === "video") {
+      assert.equal(media.height, 480);
+      assert.equal(media.duration, 20 * 60);
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("rejects formats that cannot fit the Telegram upload budget", () => {
@@ -292,14 +410,14 @@ test("uses lower bitrate AAC when it preserves a higher video quality", () => {
           format_id: "video-high",
           vcodec: "avc1.640033",
           acodec: "none",
-          height: 1080,
+          height: 720,
           filesize_approx: 9_000_000,
         },
         {
           format_id: "video-low",
           vcodec: "avc1.640033",
           acodec: "none",
-          height: 720,
+          height: 480,
           filesize_approx: 5_000_000,
         },
       ],
@@ -350,66 +468,5 @@ test("cleans only stale Bilibili temp directories", async () => {
     await access(unrelated);
   } finally {
     await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("falls back to text while another Bilibili media job is active", async () => {
-  const firstTempDir = await mkdtemp(
-    join(tmpdir(), "twprevbot-bilibili-test-"),
-  );
-  let releaseMetadata!: () => void;
-  const metadataGate = new Promise<void>((resolve) => {
-    releaseMetadata = resolve;
-  });
-  let metadataStarted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    metadataStarted = resolve;
-  });
-  const source: BilibiliUrl = {
-    kind: "direct",
-    url: "https://www.bilibili.com/video/BV1xx411c7mD/",
-    page: 1,
-    bvid: "BV1xx411c7mD",
-  };
-  const first = fetchBilibiliPreview(
-    source,
-    () => Promise.resolve(viewResponse()),
-    {
-      createTempDir: () => Promise.resolve(firstTempDir),
-      runCommand: async (file, args) => {
-        if (args.includes("--dump-single-json")) {
-          metadataStarted();
-          await metadataGate;
-          return { stdout: JSON.stringify(metadata()), stderr: "" };
-        }
-        if (file.endsWith("yt-dlp")) {
-          await writeFile(args[args.indexOf("--output") + 1]!, "merged");
-        } else {
-          await writeFile(args.at(-1)!, "faststart");
-        }
-        return { stdout: "", stderr: "" };
-      },
-    },
-  );
-
-  try {
-    await started;
-    const second = await fetchBilibiliPreview(
-      source,
-      () => Promise.resolve(viewResponse()),
-      {
-        runCommand: () => {
-          throw new Error("second media command must not run");
-        },
-      },
-    );
-
-    assert.deepEqual(second?.media, []);
-    releaseMetadata();
-    assert.equal((await first)?.media.length, 1);
-  } finally {
-    releaseMetadata();
-    await first;
-    await rm(firstTempDir, { recursive: true, force: true });
   }
 });
