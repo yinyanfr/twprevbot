@@ -11,6 +11,7 @@ import {
   buildInlineResult,
   buildAppendedMessage,
   buildTelegramPreview,
+  buildTelegramAlbumInput,
   ActiveBilibiliRequests,
   extractBilibiliUrls,
   extractTweetUrls,
@@ -18,6 +19,7 @@ import {
   logger,
   normalizeThreadResponse,
   SerialTaskQueue,
+  sendTelegramMediaBatches,
   startRepeatingChatAction,
 } from "./libs/index.js";
 import type {
@@ -300,11 +302,14 @@ async function sendPreview(
     }
   }
 
-  if (preview.media.length === 1) {
-    return await sendSingleMedia(ctx, preview, replyToMessageId, post.url);
-  }
-
-  return await sendMediaGroup(ctx, preview, replyToMessageId, post.url);
+  return await sendTelegramMediaBatches(
+    preview,
+    replyToMessageId,
+    (batch, batchReplyToMessageId) =>
+      batch.media.length === 1
+        ? sendSingleMedia(ctx, batch, batchReplyToMessageId, post.url)
+        : sendMediaGroup(ctx, batch, batchReplyToMessageId, post.url),
+  );
 }
 
 async function sendSingleMedia(
@@ -731,9 +736,12 @@ async function sendMediaGroup(
   tweetUrl: string,
 ): Promise<SentMessage> {
   try {
-    const messages = await ctx.replyWithMediaGroup(preview.media, {
-      reply_parameters: { message_id: replyToMessageId },
-    });
+    const messages = await ctx.replyWithMediaGroup(
+      buildTelegramAlbumInput(preview.media),
+      {
+        reply_parameters: { message_id: replyToMessageId },
+      },
+    );
     const firstMessageId = messages[0]?.message_id ?? replyToMessageId;
     return {
       replyMessageId: messages.at(-1)?.message_id ?? replyToMessageId,
@@ -754,13 +762,7 @@ async function sendMediaGroup(
     );
 
     try {
-      const plainMedia: TelegramMediaGroupItem[] = preview.media.map(
-        (item, index) => ({
-          type: item.type,
-          media: item.media,
-          ...(index === 0 ? { caption: preview.text } : {}),
-        }),
-      );
+      const plainMedia = buildTelegramAlbumInput(preview.media, preview.text);
       const messages = await ctx.replyWithMediaGroup(plainMedia, {
         reply_parameters: { message_id: replyToMessageId },
       });

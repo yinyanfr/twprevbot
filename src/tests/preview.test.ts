@@ -3,6 +3,52 @@ import test from "node:test";
 import { normalizeThreadResponse } from "../libs/preview.js";
 import type { FxTwitterThreadResponse } from "../services/fx-twitter.js";
 
+test("preserves all 20 media in API order, including videos, GIFs and alt text", () => {
+  const all = Array.from({ length: 20 }, (_, index) =>
+    index % 3 === 0
+      ? {
+          type: index === 0 ? ("gif" as const) : ("video" as const),
+          url: `https://example.com/${index}.mp4`,
+          width: 100,
+          height: 100,
+          duration: 5,
+          formats: [{ url: `https://example.com/${index}.mp4` }],
+        }
+      : {
+          type: "photo" as const,
+          url: `https://example.com/${index}.jpg`,
+          width: 100,
+          height: 100,
+          altText: `photo ${index}`,
+        },
+  );
+  const response: FxTwitterThreadResponse = {
+    code: 200,
+    thread: null,
+    author: null,
+    status: {
+      type: "status",
+      provider: "twitter",
+      id: "20",
+      url: "https://x.com/a/status/20",
+      text: "20 media",
+      possibly_sensitive: true,
+      author: { type: "profile", id: "a", name: "Alice", screen_name: "a" },
+      media: { all },
+    },
+  };
+  const media = normalizeThreadResponse(response)[0]!.media;
+  assert.equal(media.length, 20);
+  assert.deepEqual(
+    media.map((item) => item.url),
+    all.map((item) => item.url),
+  );
+  assert.equal(media[0]?.kind, "animation");
+  assert.equal(media[3]?.kind, "video");
+  assert.equal(media[19]?.altText, "photo 19");
+  assert.ok(media.every((item) => item.spoiler));
+});
+
 test("uses full thread when present", () => {
   const response: FxTwitterThreadResponse = {
     code: 200,

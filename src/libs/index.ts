@@ -9,6 +9,10 @@ export type { PreviewMedia, PreviewPost } from "./preview.js";
 export { buildInlineResult } from "./telegram-inline.js";
 
 export { buildTelegramPreview } from "./telegram-preview.js";
+export {
+  buildTelegramAlbumInput,
+  sendTelegramMediaBatches,
+} from "./telegram-media-batches.js";
 export type {
   TelegramMediaGroupItem,
   TelegramMediaGroupPreview,

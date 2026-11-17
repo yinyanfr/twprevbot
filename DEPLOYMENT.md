@@ -30,12 +30,18 @@ Compose runs both the bot and a local Telegram Bot API server.
 
 ## Updates
 
-Production updates are performed from Git only:
+Production updates are performed from Git only. Commit and push the tested
+changes to `origin/yt` first; never overwrite server source files using SCP.
+PM2 is not used. Before pushing, run `npm ci`, `npm audit`, `npm test`,
+`npm run typecheck`, `npm run lint`, and `npm run format:check`.
+
+On `root@cs.yinyan.fr`:
 
 ```bash
-git pull --ff-only
-docker compose up -d --build --remove-orphans
-docker image prune -f
+cd /etc/docker/containers/twprevbot
+git pull --ff-only origin yt
+docker compose build bot
+docker compose up -d --no-deps bot
 ```
 
 Inspect status and logs with:
@@ -43,7 +49,21 @@ Inspect status and logs with:
 ```bash
 docker compose ps
 docker compose logs --tail=200 bot telegram-bot-api
+git status --short
+git rev-parse --short HEAD
+docker inspect -f '{{.RestartCount}}' twprevbot-bot-1
 ```
+
+Confirm the deployed commit matches `origin/yt`, the worktree is clean, the bot
+logs `Bot started`, and the configured Bot API answers `getMe` successfully.
+Do not print tokens or cookie contents during checks.
+
+Twitter/X previews with 20 photos/videos are split into two sequential
+10-item albums. Validate normalization and batching with the example in the
+README; do not send test messages to real chats without choosing a test target.
+Bilibili uses native playurl requests and ffmpeg; cookies remain mounted
+read-only and are sent only to Bilibili APIs, not media CDNs. The image still
+includes yt-dlp solely for the separate, currently unwired YouTube service.
 
 ## Returning to the public API
 
