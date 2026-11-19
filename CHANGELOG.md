@@ -7,7 +7,7 @@
 - If Telegram cannot fetch an album by URL, download and upload that batch
   directly, preserving media order, spoilers, and the first-batch caption.
 - Retry X CDN photo URLs that return 404 using the equivalent `format` query
-  parameter, then try the `large` variant if the original is still unavailable.
+  parameter, then try smaller variants if the original is still unavailable.
 
 ## 2026-11-17
 

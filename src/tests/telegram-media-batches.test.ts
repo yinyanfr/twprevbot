@@ -102,7 +102,7 @@ test("reuses uploaded files if Telegram rejects the HTML caption", async () => {
   assert.equal(downloads, 2);
 });
 
-test("tries the large photo variant if the original is unavailable in both URL forms", async () => {
+test("tries smaller photo variants in order until one is available", async () => {
   const source = preview(2);
   source.media[0]!.media = "https://pbs.twimg.com/media/photo.jpg?name=orig";
   const requests: string[] = [];
@@ -119,7 +119,7 @@ test("tries the large photo variant if the original is unavailable in both URL f
       assert.ok(typeof url === "string");
       requests.push(url);
       return Promise.resolve(
-        url.includes("name=orig")
+        /name=(orig|large|medium)$/.test(url)
           ? new Response(null, { status: 404 })
           : new Response("media"),
       );
@@ -129,6 +129,8 @@ test("tries the large photo variant if the original is unavailable in both URL f
     "https://pbs.twimg.com/media/photo.jpg?name=orig",
     "https://pbs.twimg.com/media/photo?format=jpg&name=orig",
     "https://pbs.twimg.com/media/photo?format=jpg&name=large",
+    "https://pbs.twimg.com/media/photo?format=jpg&name=medium",
+    "https://pbs.twimg.com/media/photo?format=jpg&name=900x900",
     "https://example.com/1",
   ]);
 });

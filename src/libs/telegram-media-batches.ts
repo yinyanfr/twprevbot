@@ -85,8 +85,13 @@ function alternateTwitterPhotoUrls(rawUrl: string): string[] {
   if (name !== "orig") {
     return [alternate];
   }
-  url.searchParams.set("name", "large");
-  return [alternate, url.href];
+  return [
+    alternate,
+    ...["large", "medium", "900x900", "small"].map((size) => {
+      url.searchParams.set("name", size);
+      return url.href;
+    }),
+  ];
 }
 
 async function downloadAlbum(
