@@ -11,7 +11,6 @@ import {
   buildInlineResult,
   buildAppendedMessage,
   buildTelegramPreview,
-  buildTelegramAlbumInput,
   ActiveBilibiliRequests,
   extractBilibiliUrls,
   extractTweetUrls,
@@ -22,6 +21,7 @@ import {
   sendTelegramMediaBatches,
   startRepeatingChatAction,
 } from "./libs/index.js";
+import { sendTelegramAlbum } from "./libs/telegram-media-batches.js";
 import type {
   BilibiliUrl,
   PreviewPost,
@@ -736,11 +736,10 @@ async function sendMediaGroup(
   tweetUrl: string,
 ): Promise<SentMessage> {
   try {
-    const messages = await ctx.replyWithMediaGroup(
-      buildTelegramAlbumInput(preview.media),
-      {
+    const messages = await sendTelegramAlbum(preview, (album) =>
+      ctx.replyWithMediaGroup(album, {
         reply_parameters: { message_id: replyToMessageId },
-      },
+      }),
     );
     const firstMessageId = messages[0]?.message_id ?? replyToMessageId;
     return {
@@ -758,48 +757,23 @@ async function sendMediaGroup(
         mediaUrls: preview.media.map((item) => item.media),
         mediaTypes: preview.media.map((item) => item.type),
       },
-      "Failed to send media group with HTML caption",
+      "Failed to send media group; falling back to text",
     );
 
-    try {
-      const plainMedia = buildTelegramAlbumInput(preview.media, preview.text);
-      const messages = await ctx.replyWithMediaGroup(plainMedia, {
-        reply_parameters: { message_id: replyToMessageId },
-      });
-      const firstMessageId = messages[0]?.message_id ?? replyToMessageId;
-      return {
-        replyMessageId: messages.at(-1)?.message_id ?? replyToMessageId,
-        appendTarget: {
-          messageId: firstMessageId,
-          content: { kind: "caption", html: preview.html, text: preview.text },
+    const message = await ctx.reply(preview.text || tweetUrl, {
+      reply_parameters: { message_id: replyToMessageId },
+    });
+    return {
+      replyMessageId: message.message_id,
+      appendTarget: {
+        messageId: message.message_id,
+        content: {
+          kind: "text",
+          html: preview.html || tweetUrl,
+          text: preview.text || tweetUrl,
         },
-      };
-    } catch (retryError) {
-      logger.warn(
-        {
-          err: retryError,
-          tweetUrl,
-          mediaUrls: preview.media.map((item) => item.media),
-          mediaTypes: preview.media.map((item) => item.type),
-        },
-        "Failed to send media group with plain caption",
-      );
-
-      const message = await ctx.reply(`${preview.text}\n\n${tweetUrl}`, {
-        reply_parameters: { message_id: replyToMessageId },
-      });
-      return {
-        replyMessageId: message.message_id,
-        appendTarget: {
-          messageId: message.message_id,
-          content: {
-            kind: "text",
-            html: `${preview.html}\n\n${tweetUrl}`,
-            text: `${preview.text}\n\n${tweetUrl}`,
-          },
-        },
-      };
-    }
+      },
+    };
   }
 }
 

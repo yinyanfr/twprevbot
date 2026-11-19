@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GrammyError, InputFile } from "grammy";
 import {
   buildTelegramAlbumInput,
+  sendTelegramAlbum,
   sendTelegramMediaBatches,
   splitTelegramMediaBatches,
 } from "../libs/telegram-media-batches.js";
@@ -9,6 +11,156 @@ import {
   buildTelegramPreview,
   type TelegramMediaGroupPreview,
 } from "../libs/telegram-preview.js";
+
+function albumError(description: string): GrammyError {
+  return new GrammyError(
+    "Album rejected",
+    { ok: false, error_code: 400, description },
+    "sendMediaGroup",
+    {},
+  );
+}
+
+test("uploads a rejected album in order and retries a 404 Twitter photo at the same size", async () => {
+  const source = preview(2);
+  const original = "https://pbs.twimg.com/media/photo.jpg?name=orig";
+  source.media[0]!.media = original;
+  const requests: string[] = [];
+  let sends = 0;
+  const result = await sendTelegramAlbum(
+    source,
+    (items) => {
+      if (++sends === 1) {
+        assert.deepEqual(
+          items.map((item) => item.media),
+          [original, "https://example.com/1"],
+        );
+        throw albumError(
+          'failed to send message #2 with the error message "WEBPAGE_CURL_FAILED"',
+        );
+      }
+      assert.ok(items.every((item) => item.media instanceof InputFile));
+      assert.deepEqual(
+        items.map((item) => item.type),
+        ["photo", "video"],
+      );
+      assert.equal(items[0]?.caption, source.html);
+      assert.equal(items[0]?.parse_mode, "HTML");
+      assert.equal(items[1]?.caption, undefined);
+      assert.ok(
+        items.every((item) => "has_spoiler" in item && item.has_spoiler),
+      );
+      return Promise.resolve(123);
+    },
+    (url) => {
+      assert.ok(typeof url === "string");
+      requests.push(url);
+      return Promise.resolve(
+        url === original
+          ? new Response(null, { status: 404 })
+          : new Response("media"),
+      );
+    },
+  );
+  assert.equal(result, 123);
+  assert.equal(sends, 2);
+  assert.deepEqual(requests, [
+    original,
+    "https://pbs.twimg.com/media/photo?format=jpg&name=orig",
+    "https://example.com/1",
+  ]);
+});
+
+test("reuses uploaded files if Telegram rejects the HTML caption", async () => {
+  let sends = 0;
+  let downloads = 0;
+  let uploaded: string | InputFile | undefined;
+  const source = preview(2);
+  await sendTelegramAlbum(
+    source,
+    (items) => {
+      switch (++sends) {
+        case 1:
+          throw albumError("failed to get HTTP URL content");
+        case 2:
+          uploaded = items[0]?.media;
+          throw albumError("can't parse entities");
+        default:
+          assert.ok(uploaded instanceof InputFile);
+          assert.equal(items[0]?.media, uploaded);
+          assert.equal(items[0]?.caption, source.text);
+          assert.equal(items[0]?.parse_mode, undefined);
+          return Promise.resolve();
+      }
+    },
+    () => {
+      downloads++;
+      return Promise.resolve(new Response("media"));
+    },
+  );
+  assert.equal(sends, 3);
+  assert.equal(downloads, 2);
+});
+
+test("tries the large photo variant if the original is unavailable in both URL forms", async () => {
+  const source = preview(2);
+  source.media[0]!.media = "https://pbs.twimg.com/media/photo.jpg?name=orig";
+  const requests: string[] = [];
+  let sends = 0;
+  await sendTelegramAlbum(
+    source,
+    () => {
+      if (++sends === 1) {
+        throw albumError("WEBPAGE_CURL_FAILED");
+      }
+      return Promise.resolve();
+    },
+    (url) => {
+      assert.ok(typeof url === "string");
+      requests.push(url);
+      return Promise.resolve(
+        url.includes("name=orig")
+          ? new Response(null, { status: 404 })
+          : new Response("media"),
+      );
+    },
+  );
+  assert.deepEqual(requests, [
+    "https://pbs.twimg.com/media/photo.jpg?name=orig",
+    "https://pbs.twimg.com/media/photo?format=jpg&name=orig",
+    "https://pbs.twimg.com/media/photo?format=jpg&name=large",
+    "https://example.com/1",
+  ]);
+});
+
+test("does not retry ambiguous send failures", async () => {
+  const error = new Error("connection lost");
+  let sends = 0;
+  await assert.rejects(
+    sendTelegramAlbum(preview(2), () => {
+      sends++;
+      throw error;
+    }),
+    error,
+  );
+  assert.equal(sends, 1);
+});
+
+test("rejects an oversized photo during album download without attempting upload", async () => {
+  let sends = 0;
+  await assert.rejects(
+    sendTelegramAlbum(
+      preview(2),
+      () => {
+        sends++;
+        throw albumError("WEBPAGE_CURL_FAILED");
+      },
+      () => Promise.resolve(new Response(new Uint8Array(10_000_001))),
+    ),
+    /exceeded the size limit/,
+  );
+  assert.equal(sends, 1);
+});
 
 function preview(count: number): TelegramMediaGroupPreview {
   const result = buildTelegramPreview({

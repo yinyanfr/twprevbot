@@ -51,8 +51,9 @@ Telegram allows 2–10 items per album. A tweet with 20 photos/videos is sent as
 two albums of 10; an 11-item tweet becomes an album plus one single-media
 message. Media order, spoilers, and alt-text numbering are preserved. Further
 thread posts reply to the last batch, while text-only continuations can append
-to the first caption as before. If an album fails, only that batch uses the
-existing plain-caption/text fallback; already sent albums are not resent.
+to the first caption as before. If Telegram cannot fetch an album's URLs, the
+bot downloads and uploads that batch directly before falling back to text.
+Already sent albums are not resent.
 
 Example: <https://twitter.com/pupii_55/status/2121925710239629421>.
 All 20 items must be present in the upstream FxTwitter response.
